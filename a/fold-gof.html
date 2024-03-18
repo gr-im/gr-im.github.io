@@ -1,0 +1,198 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta http-equiv="x-ua-compatible" content="ie=edge" />
+
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>gr-im.github.io - Fold for cheap pattern-matching</title>
+    <meta name="description" content="Summary of a response regarding the encoding of visitors without pattern matching in OCaml, using the fold function." />
+    <meta name="author" content="Grim" />
+    <meta name="twitter:creator" content="@grimfw" />
+    <meta name="og:title" content="Fold for cheap pattern-matching" />
+    <meta name="twitter:title" content="Fold for cheap pattern-matching" />
+    <meta name="og:description" content="Summary of a response regarding the encoding of visitors without pattern matching in OCaml, using the fold function." />
+    <meta name="twitter:description" content="Summary of a response regarding the encoding of visitors without pattern matching in OCaml, using the fold function." /><link rel="stylesheet" href="/css/style.css" />
+  </head>
+  <body>
+    <header>
+      <h2><a href="/">Grim's web corner</a></h2>
+      <p><i>Notes, essays and ramblings</i></p>
+    </header>
+    <main><h1>Fold for cheap pattern-matching</h1>
+<aside>
+  Published on <time datetime="2024-03-18">2024-03-18</time>
+</aside>
+
+<article><p>A few days ago, <a href="https://hakimba.github.io/oxywa/">Hakim Baaloudj</a> reacted to a somewhat provocative
+message from <a href="https://xvw.lol">Xavier Van de Woestyne</a>, stating that all design patterns
+proposed in the book &quot;<em>Design Patterns: Elements of Reusable Object-Oriented
+Software</em>&quot; could be reduced to &quot;<em>if only my language had lambdas and modules</em>&quot;.
+This led him to ask the following question in a conversation space that we all
+frequent:</p>
+<blockquote>
+<p>&quot;<em>And one of the first thoughts I had was that we'd also need <strong>pattern
+matching</strong> (especially for the <strong>visitor design pattern</strong>), how can we avoid
+having to use the visitor's encoding, just by using modules and lambdas?</em>&quot;</p>
+</blockquote>
+<p>I don't have a particular opinion on the book (or on design patterns in
+general), but here is a revised version of the response I sent to him. The
+article is obviously not groundbreaking, and it simply sketches out the encoding
+of visitors through <code>fold</code>. Moreover, it should only be taken as a response to
+the question &quot;<em>how to encode the visitor without pattern matching</em>&quot; and not as a
+plea against the usefulness of pattern matching. Indeed, I am instinctively
+convinced that, akin to the explicit ability to delineate algebraic types,
+pattern matching objectively enhances a language.</p>
+<h2 id="the-main-idea-behind-the-fold-function"><a class="anchor" aria-hidden="true" href="#the-main-idea-behind-the-fold-function"></a>The main idea behind the <code>fold</code> function</h2>
+<p>We can offer an exceedingly broad definition of the <code>fold</code> function, which
+aligns with the domain of <strong>recursion schemes</strong> (referred to as a
+<em>catamorphism</em>), extensively expounded upon in <a href="https://maartenfokkinga.github.io/utwente/mmf91m.pdf">this paper</a>,
+encapsulating the concept of generic reduction. However, I believe that, for the
+purposes of demonstration, delving into extensive theory is unnecessary. It
+suffices to describe, in the case of the <em>catamorphism</em>, a <strong>case analysis</strong>.
+Indeed, one could summarise the <code>fold</code> function as one that will <strong>traverse</strong>
+the various branches of a type. Let's consider an initial example with the
+option type, described by the following type:</p>
+<pre><code class="language-ocaml">type 'a option = 
+  | Some of 'a
+  | None
+</code></pre>
+<p>The <code>fold</code> function will need to handle the case where the value is <code>Some x</code> or
+if the value is <code>None</code>. Nothing could be simpler, <em>old chap</em>! We shall describe
+a function of type: <code>'a option -&gt; ('a -&gt; 'b) -&gt; (unit -&gt; 'b) -&gt; 'b</code>.</p>
+<pre><code class="language-ocaml">let fold opt when_some when_none =
+  match opt with
+  | None   -&gt; when_none ()
+  | Some x -&gt; when_some x 
+</code></pre>
+<p>So, if our value happens to be <code>Some x</code>, we employ <code>when_some x</code>, and if it
+turns out to be <code>None</code>, we utilise <code>when_none ()</code> (employing a function <code>unit -&gt; 'b</code> to defer computation in the event of <code>None</code>). With this function, one can
+readily re-encode pattern matching cases (admittedly, at the expense of a bit
+more verbosity). For example, this <em>peculiar function</em>:</p>
+<pre><code class="language-ocaml">let my_f opt = 
+  match opt with
+  | Some ((3 | 10) as x) -&gt; x
+  | Some x -&gt; 0 - x
+  | None -&gt; 0
+</code></pre>
+<p>Could possibly be rewritten in terms of fold in this manner:</p>
+<pre><code class="language-ocaml">let my_f_with_fold opt = fold opt
+  (fun x  -&gt; 
+     if (x = 3 || x = 10) then x else 0 - x)
+  (fun () -&gt; 0)
+</code></pre>
+<p>In terms of outcome, the two functions are identical. However, while the
+approach with <code>fold</code> is, let's be honest, considerably more verbose than the one
+using pattern matching, but <code>fold</code> can also operate on <strong>abstract types</strong> (types
+whose structure/shape is unknown, or solely <em>crystallised through its API</em>).
+<code>fold</code> is indeed <strong>highly generalisable</strong> and it's a fascinating exercise to
+implement it for a plethora of sum types (also introducing recursion, such as
+<code>List</code> or for trees), and alongside recursion schemes, its properties are
+expansively documented in <a href="https://www.cs.nott.ac.uk/~pszgmh/fold.pdf">this paper</a>.</p>
+<p>However, more astute readers may have noticed a <strong>slight trickery</strong>! Indeed,
+<strong>we use pattern matching to suggest that we can do without pattern matching</strong>,
+which seems rather bold! No worries, let's reimplement <code>Option</code> in terms of
+objects and completely do away with pattern matching.</p>
+<h2 id="objects-and-absence-of-pattern-matching"><a class="anchor" aria-hidden="true" href="#objects-and-absence-of-pattern-matching"></a>Objects and absence of pattern matching</h2>
+<p>Since <a href="https://ocaml.org">OCaml</a> boasts a perfectly decent object-oriented
+language, we don't need to switch languages, which is rather splendid. Firstly,
+let's describe the interface of our option using an <em>OOP</em> interface:</p>
+<pre><code class="language-ocaml">class type ['a] option_obj = object
+  method fold : ('a -&gt; 'b) -&gt; (unit -&gt; 'b) -&gt; 'b
+end
+</code></pre>
+<p>Now, we shall implement the constructors <code>some</code> and <code>none</code> so that they adhere
+to this interface:</p>
+<pre><code class="language-ocaml">module Option_obj : sig
+  val some : 'a   -&gt; 'a option_obj
+  val none : unit -&gt; 'a option_obj 
+  val fold : 'a option_obj -&gt; ('a -&gt; 'b) -&gt; (unit -&gt; 'b) -&gt; 'b
+end
+</code></pre>
+<p>The major difference with the constructors <code>Some</code> and <code>None</code> lies in the fact
+that <code>none</code> must take <code>unit</code> as an argument, due to the <a href="https://v2.ocaml.org/manual/polymorphism.html"><em>value
+restriction</em></a>, but this is a
+detail that doesn't make its usage overly complex. Now, we can implement the
+structure of the module <code>Option_obj</code>, which, in fact, is conceptually <strong>very
+close</strong> to what we had done with pattern matching.</p>
+<pre><code class="language-ocaml">module Option_obj = struct 
+  
+  class ['a] some (x: 'a) = 
+    object (_: 'a #option_obj)
+      method fold when_some _when_none = when_some x
+    end
+  
+  class ['a] none = 
+    object (_: 'a #option_obj)
+      method fold _when_some when_none = when_none ()
+    end
+    
+  let fold (opt : 'a option_obj) when_some when_none = 
+    opt#fold when_some when_none
+  
+  let some x = new some x
+  let none () = new none
+end
+</code></pre>
+<p>One can observe the natural symmetry between disjunctions via sum types and
+through subtyping relations. Our <code>fold</code> function (in the <code>Option_obj</code> module)
+has the same API as the one we defined using pattern matching, but this time,
+we're not using pattern matching at all!</p>
+<p>The <strong>major</strong> difference from the usual definition of a visitor is that when we
+support lambdas, we can drastically <strong>reduce the need for boilerplate</strong> to add
+behaviour to our case analysis. Indeed, without lambdas, for each case analysis,
+we would need to add an interface unifying both cases through an interface (and
+thus concretize it with an implementation).</p>
+<h2 id="so-do-we-truly-need-pattern-matching"><a class="anchor" aria-hidden="true" href="#so-do-we-truly-need-pattern-matching"></a>So, do we truly need pattern matching</h2>
+<p>We've seen that it's possible to do without pattern matching using subtyping
+relations and the presence of lambdas significantly simplifies the definition of
+visitors. However, something about the premise bothers me a bit. Indeed, we're
+using an <strong>encoding</strong> to build a missing feature of the language: pattern
+matching. But, just as we can encode <em>cheap</em> pattern matching, <strong>we can encode</strong>
+<em>cheap</em> lambdas via objects:</p>
+<pre><code class="language-ocaml">class type ['a, 'b] lam = object
+  method apply : 'a -&gt; 'b
+end
+</code></pre>
+<p>Allowing us to entirely sidestep lambdas by redefining our type <code>'a option_obj</code>
+in this fashion:</p>
+<pre><code class="language-ocaml">class type ['a] option_obj = object
+  method fold : ('a, 'b) lam -&gt; (unit, 'b) lam -&gt; 'b
+end
+</code></pre>
+<p>Enabling us, albeit with a considerable verbosity, to have visitors without
+lambdas and without the need for visitor unification. But who would want to
+write that? Especially in OCaml?</p>
+<h2 id="conclusion"><a class="anchor" aria-hidden="true" href="#conclusion"></a>Conclusion</h2>
+<p>I perfectly understand that the support for lambdas in a language significantly
+<strong>reduces the necessity for complicated encodings</strong>, which rely on complex
+inheritance lattices, on many aspects. However, we have also seen that it is
+possible to encode lambdas in a similar manner to how we have used for pattern
+matching, prompting me to ask the following question: &quot;<em>if we can encode
+lambdas, in what way is pattern matching less necessary than lambdas</em>&quot;?</p>
+<p>My conclusion is therefore a bit more extreme than <a href="https://xvw.lol">Xavier</a>'s, considering
+that any functionality, comprehensible, which makes syntactical sense, deserves
+to be added to a language, and that as fulfilled OCaml programmers, we should
+not impose <a href="https://en.wikipedia.org/wiki/Church_encoding">Church encodings</a> on
+ourselves when our language offers us interesting syntactic constructions!
+However, understanding these encodings (and their generalizations, i.e.,
+recursion schemes) sometimes allows for building generic intuitions and
+sometimes for supporting features when the language grammar does not offer
+first-class support, a bit like profunctors, which impose point-free style but
+allow for handling &quot;<em>kinds of functions</em>&quot; generically.</p>
+<h3>Bibliography</h3>
+  <ol class="bibliography"><li>
+      <span class="title"><a href="https://en.wikipedia.org/wiki/Design_Patterns">Design Patterns: Elements of Reusable Object-Oriented Software</a></span><span class="date">1994</span><ul class="authors"><li>Erich Gamma</li><li>Richard Helm</li><li>Ralph Johnson</li><li>John Vlissides</li></ul>
+    </li><li>
+      <span class="title"><a href="https://maartenfokkinga.github.io/utwente/mmf91m.pdf">Functional programming with bananas, lenses, envelopes and barbed wire</a></span><span class="date">1991</span><ul class="authors"><li>Erik Meijer</li><li>Maarten Fokkinga</li><li>Ross Paterson</li></ul>
+    </li><li>
+      <span class="title"><a href="https://www.cs.nott.ac.uk/~pszgmh/fold.pdf">A tutorial on the universality and expressiveness of fold</a></span><span class="date">1999</span><ul class="authors"><li>Graham Hutton</li></ul>
+    </li></ol></article>
+</main>
+    <footer>
+      <p>
+        Crafted with <a href="https://github.com/xhtmlboi/yocaml">YOCaml</a>
+      </p>
+    </footer>
+  </body>
+</html>
