@@ -21,7 +21,7 @@
     </header>
     <main><h1>Fold for cheap pattern-matching</h1>
 <aside>
-  Published on <time datetime="2024-03-18">2024-03-18</time>
+  Published on <time datetime=""></time>
 </aside>
 
 <article><p>A few days ago, <a href="https://hakimba.github.io/oxywa/">Hakim Baaloudj</a> reacted to a somewhat provocative
@@ -43,7 +43,7 @@ the question &quot;<em>how to encode the visitor without pattern matching</em>&q
 plea against the usefulness of pattern matching. Indeed, I am instinctively
 convinced that, akin to the explicit ability to delineate algebraic types,
 pattern matching objectively enhances a language.</p>
-<h2 id="the-main-idea-behind-the-fold-function"><a class="anchor" aria-hidden="true" href="#the-main-idea-behind-the-fold-function"></a>The main idea behind the <code>fold</code> function</h2>
+<h2 id="the-main-idea-behind-the-fold-function">The main idea behind the <code>fold</code> function</h2>
 <p>We can offer an exceedingly broad definition of the <code>fold</code> function, which
 aligns with the domain of <strong>recursion schemes</strong> (referred to as a
 <em>catamorphism</em>), extensively expounded upon in <a href="https://maartenfokkinga.github.io/utwente/mmf91m.pdf">this paper</a>,
@@ -93,7 +93,7 @@ expansively documented in <a href="https://www.cs.nott.ac.uk/~pszgmh/fold.pdf">t
 <strong>we use pattern matching to suggest that we can do without pattern matching</strong>,
 which seems rather bold! No worries, let's reimplement <code>Option</code> in terms of
 objects and completely do away with pattern matching.</p>
-<h2 id="objects-and-absence-of-pattern-matching"><a class="anchor" aria-hidden="true" href="#objects-and-absence-of-pattern-matching"></a>Objects and absence of pattern matching</h2>
+<h2 id="objects-and-absence-of-pattern-matching">Objects and absence of pattern matching</h2>
 <p>Since <a href="https://ocaml.org">OCaml</a> boasts a perfectly decent object-oriented
 language, we don't need to switch languages, which is rather splendid. Firstly,
 let's describe the interface of our option using an <em>OOP</em> interface:</p>
@@ -103,8 +103,9 @@ end
 </code></pre>
 <p>Now, we shall implement the constructors <code>some</code> and <code>none</code> so that they adhere
 to this interface:</p>
+<!-- $MDX skip -->
 <pre><code class="language-ocaml">module Option_obj : sig
-  val some : 'a   -&gt; 'a option_obj
+  val some : 'a -&gt; 'a option_obj
   val none : unit -&gt; 'a option_obj 
   val fold : 'a option_obj -&gt; ('a -&gt; 'b) -&gt; (unit -&gt; 'b) -&gt; 'b
 end
@@ -143,7 +144,7 @@ support lambdas, we can drastically <strong>reduce the need for boilerplate</str
 behaviour to our case analysis. Indeed, without lambdas, for each case analysis,
 we would need to add an interface unifying both cases through an interface (and
 thus concretize it with an implementation).</p>
-<h2 id="so-do-we-truly-need-pattern-matching"><a class="anchor" aria-hidden="true" href="#so-do-we-truly-need-pattern-matching"></a>So, do we truly need pattern matching</h2>
+<h2 id="so-do-we-truly-need-pattern-matching">So, do we truly need pattern matching</h2>
 <p>We've seen that it's possible to do without pattern matching using subtyping
 relations and the presence of lambdas significantly simplifies the definition of
 visitors. However, something about the premise bothers me a bit. Indeed, we're
@@ -163,7 +164,7 @@ end
 <p>Enabling us, albeit with a considerable verbosity, to have visitors without
 lambdas and without the need for visitor unification. But who would want to
 write that? Especially in OCaml?</p>
-<h2 id="conclusion"><a class="anchor" aria-hidden="true" href="#conclusion"></a>Conclusion</h2>
+<h2 id="conclusion">Conclusion</h2>
 <p>I perfectly understand that the support for lambdas in a language significantly
 <strong>reduces the necessity for complicated encodings</strong>, which rely on complex
 inheritance lattices, on many aspects. However, we have also seen that it is
@@ -182,16 +183,22 @@ first-class support, a bit like profunctors, which impose point-free style but
 allow for handling &quot;<em>kinds of functions</em>&quot; generically.</p>
 <h3>Bibliography</h3>
   <ol class="bibliography"><li>
-      <span class="title"><a href="https://en.wikipedia.org/wiki/Design_Patterns">Design Patterns: Elements of Reusable Object-Oriented Software</a></span><span class="date">1994</span><ul class="authors"><li>Erich Gamma</li><li>Richard Helm</li><li>Ralph Johnson</li><li>John Vlissides</li></ul>
+      <span class="title"><a href="https://en.wikipedia.org/wiki/Design_Patterns">Design Patterns: Elements of Reusable Object-Oriented Software</a></span><ul class="authors"><li>Erich Gamma</li><li>Richard Helm</li><li>Ralph Johnson</li><li>John Vlissides</li></ul>
     </li><li>
-      <span class="title"><a href="https://maartenfokkinga.github.io/utwente/mmf91m.pdf">Functional programming with bananas, lenses, envelopes and barbed wire</a></span><span class="date">1991</span><ul class="authors"><li>Erik Meijer</li><li>Maarten Fokkinga</li><li>Ross Paterson</li></ul>
+      <span class="title"><a href="https://maartenfokkinga.github.io/utwente/mmf91m.pdf">Functional programming with bananas, lenses, envelopes and barbed wire</a></span><ul class="authors"><li>Erik Meijer</li><li>Maarten Fokkinga</li><li>Ross Paterson</li></ul>
     </li><li>
-      <span class="title"><a href="https://www.cs.nott.ac.uk/~pszgmh/fold.pdf">A tutorial on the universality and expressiveness of fold</a></span><span class="date">1999</span><ul class="authors"><li>Graham Hutton</li></ul>
+      <span class="title"><a href="https://www.cs.nott.ac.uk/~pszgmh/fold.pdf">A tutorial on the universality and expressiveness of fold</a></span><ul class="authors"><li>Graham Hutton</li></ul>
     </li></ol></article>
 </main>
     <footer>
       <p>
         Crafted with <a href="https://github.com/xhtmlboi/yocaml">YOCaml</a>
+      </p>
+      <p>
+        This website is member of
+        <a href="https://ring.muhokama.fun">Muhokama</a> -
+        <a href="https://ring.muhokama.fun/u/grm/pred">Pred</a> |
+        <a href="https://ring.muhokama.fun/u/grm/succ">Succ</a>
       </p>
     </footer>
   </body>
