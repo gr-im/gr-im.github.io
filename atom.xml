@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="utf-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom">
+  <id>https://gr-im.github.io/atom.xml</id>
+  <title type="text">Grim&apos;s web corner</title>
+  <subtitle type="text">Notes, essays and ramblings</subtitle>
+  <generator uri="https://github.com/xhtmlboi/yocaml" version="2">YOCaml</generator>
+  <updated>2024-03-18T00:00:00Z</updated>
+  <author>
+    <name>Grim</name>
+    <uri>https://gr-im.github.io</uri>
+    <email>grimfw@gmail.com</email>
+  </author>
+  <link href="https://gr-im.github.io/atom.xml" rel="self"/>
+  <link href="https://gr-im.github.io"/>
+  <entry>
+    <id>https://gr-im.github.io/a/fold-gof.html</id>
+    <title type="text">Fold for cheap pattern-matching</title>
+    <updated>2024-03-18T00:00:00Z</updated>
+    <summary type="text">
+      Summary of a response regarding the encoding of visitors without pattern matching in OCaml, using the fold function.
+    </summary>
+    <link href="https://gr-im.github.io/a/fold-gof.html" rel="alternate" title="Fold for cheap pattern-matching"/>
+  </entry>
+</feed>
