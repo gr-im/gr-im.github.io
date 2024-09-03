@@ -116,11 +116,11 @@ found quite <em>original</em>.</p>
 percentage only if you are in the same slice.</p>
 <pre><code class="language-ocaml">let slice_of data = 
   let p = result data |&gt; Float.to_int in
-  if p = 100 then 8 else p / 9
+  if p = 100 then 8 else p / 8
 </code></pre>
 <p>We assume that if we have a perfect score (<code>100</code>), we project the result into
-the last slice, <code>9</code>, so that the score can be compared with the results between
-<code>90</code> and 100 (<em>inclusive</em>). Now we can refine our heuristic so that it only
+the last slice, <code>8</code>, so that the score can be compared with the results between
+<code>~90</code> and 100 (<em>inclusive</em>). Now we can refine our heuristic so that it only
 produces a fine comparison when scores are present in the same slice:</p>
 <pre><code class="language-ocaml"># sort (fun a b -&gt; 
     let slice_a = slice_of a and slice_b = slice_of b in
