@@ -1,0 +1,582 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta http-equiv="x-ua-compatible" content="ie=edge" />
+
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>gr-im.github.io - Basic dependency injection with objects</title>
+    <meta name="description" content="A simple way to encode dependency injection using the Reader monad and objects in OCaml (to work well with type inference)." />
+    <meta name="author" content="Grim" />
+    <meta name="twitter:creator" content="@grimfw" />
+    <meta name="og:title" content="Basic dependency injection with objects" />
+    <meta name="twitter:title" content="Basic dependency injection with objects" />
+    <meta name="og:description" content="A simple way to encode dependency injection using the Reader monad and objects in OCaml (to work well with type inference)." />
+    <meta name="twitter:description" content="A simple way to encode dependency injection using the Reader monad and objects in OCaml (to work well with type inference)." /><link rel="stylesheet" href="/css/style.css" />
+  </head>
+  <body>
+    <header>
+      <h2><a href="/">Grim's web corner</a></h2>
+      <p><i>Notes, essays and ramblings</i></p>
+    </header>
+    <main><h1>Basic dependency injection with objects</h1>
+<aside>
+  Published on
+  <time datetime="2025-08-18 00:00:00">2025-08-18</time>
+</aside>
+
+<article><p>In his article <a href="https://xvw.lol/en/articles/why-ocaml.html"><em>Why I chose OCaml as my primary
+language</em></a>, my friend
+<a href="https://xvw.lol">Xavier Van de Woestyne</a> presents, in the section <a href="https://xvw.lol/en/articles/why-ocaml.html#dependency-injection-and-inversion"><em>Dependency
+injection and
+inversion</em></a>,
+two approaches to implementing dependency injection: one using
+<a href="https://xvw.lol/en/articles/why-ocaml.html#through-user-defined-effects">user-defined
+effects</a>
+and one using <a href="https://xvw.lol/en/articles/why-ocaml.html#through-modules">modules as first-class
+values</a>. Even
+though I’m quite convinced that both approaches are <em>legit</em>, I find
+them sometimes a bit <em>overkill</em> and showing fairly obvious pitfalls
+when applied to real software. The goal of this article is therefore
+to briefly highlight the ergonomic weaknesses of both approaches, and
+then propose a new encoding of inversion and dependency injection that
+I find more comfortable (<em>in many cases</em>). In addition, <strong>this gives
+an example of using objects in OCaml</strong>, which are often overlooked,
+even though in my view OCaml’s object model is very interesting and
+offers a lot of practical convenience.</p>
+<blockquote>
+<p>This approach is by no means novel and is largely the result of
+several experiments shared with <a href="https://xvw.lol">Xavier Van de Woestyne</a> during
+multiple <em>pair-programming</em> sessions. However, a precursor of this
+encoding can be found in the <a href="https://github.com/xhtmlboi/yocaml/blob/ec0fa3efa1537f90f24f07b77e4d2aaec23ae9d1/lib/yocaml/effect.ml#L3">first version of
+YOCaml</a>
+(using a <a href="https://okmij.org/ftp/Haskell/extensible/more.pdf">Left Kan Extension/Freer
+Monad</a> rather
+than a Reader). It's also interesting we can find a similar approach
+in the recent work around <a href="https://github.com/getkyo/kyo">Kyo</a>, an
+effect system for the <a href="https://www.scala-lang.org/">Scala</a> language,
+which uses a similar <em>trick</em> based on subtyping relationships to
+type an environment.</p>
+</blockquote>
+<h2 id="why-use-dependency-injection"><a class="anchor" aria-hidden="true" href="#why-use-dependency-injection"></a>Why use dependency injection?</h2>
+<p>There are plenty of documents that describe (sometimes a bit
+<em>aggressively</em>) all the benefits of dependency injection, which are
+sometimes extended into fairly formalized software architectures (such
+as <a href="https://en.wikipedia.org/wiki/Hexagonal_architecture_(software)">hexagonal
+architecture</a>). For
+my part, I find that dependency injection makes <strong>unit testing a
+program trivial</strong>, which I think is reason enough to care about it
+(For example, the <em>time-tracker</em> I use at work,
+<a href="https://github.com/xvw/kohai">Kohai</a>, uses
+<a href="https://www.gnu.org/software/emacs/">Emacs</a> as its interface and the
+file system as its database. Thanks to inversion and dependency
+injection, we were able to <a href="https://github.com/xvw/kohai/blob/main/test/server/logging_procedure_test.ml">achieve high test
+coverage</a>
+fairly easily).</p>
+<h3 id="effect-system-and-dependency-injection"><a class="anchor" aria-hidden="true" href="#effect-system-and-dependency-injection"></a>Effect system and dependency injection</h3>
+<p>There are <em>many different ways</em> to describe an effect handler, so in
+my view it is difficult to give a precise definition of what an
+<em>Effect system</em> is. However, in our modern interpretation, the goal is
+more to suspend a computation so it can be interpreted by the runtime
+(the famous <a href="https://www.haskell.org/tutorial/io.html">IO monad</a>), and
+an <em>Effect system</em> is often described as a systematic way to separate
+the <strong>denotational</strong> description of a program, where propagated
+effects are <strong>operational</strong> “<em>holes</em>” that are given meaning via a
+<em>handler</em>, usually providing the ability to <strong>control the program’s
+execution flow</strong> (its <strong>continuation</strong>), unlocking the possibility to
+describe, for example, <a href="https://kcsrk.info/papers/system_effects_feb_18.pdf">concurrent
+programs</a>. In
+this article, I focus on dependency injection rather than on building
+an effect system because that would be very <em>pretentious</em> (my article
+does not address performance or runtime concerns). Similarly to how
+exception handling can be seen as a <strong>special case</strong> of effect
+propagation and interpretation (where the captured continuation is
+never resumed), I also see dependency injection as a <strong>special case</strong>,
+this time, where the continuation is always resumed. It’s quite
+amusing to see that dependency injection and exception capturing can
+be considered two special cases of effect abstraction, differing only
+in how the continuation is handled.</p>
+<h2 id="the-drawbacks-of-modules-and-user-defined-effects"><a class="anchor" aria-hidden="true" href="#the-drawbacks-of-modules-and-user-defined-effects"></a>The Drawbacks of Modules and User-Defined Effects</h2>
+<p>As I mentioned in the introduction, I believe that both approaches
+proposed by Xavier are perfectly legitimate. However, after using both
+approaches in real-world software, I noticed several small annoyances
+that I will try to share with you.</p>
+<h3 id="using-modules"><a class="anchor" aria-hidden="true" href="#using-modules"></a>Using modules</h3>
+<p>Using modules (through
+<a href="https://ocaml.org/manual/5.1/moduleexamples.html#s%3Afunctors">functors</a>
+or by <a href="https://ocaml.org/manual/5.1/firstclassmodules.html#start-section">passing them as
+values</a>)
+seems to be the ideal approach for this kind of task. However, the
+module language in OCaml has a different type system, in which <strong>type
+inference is severely limited</strong>. From my point of view, these
+limitations can lead to a lot of verbosity whenever I want to imagine
+that my dependencies come from multiple different sources. For
+example, consider these two signatures:</p>
+<p>The first one provides basic manipulation of the file system (very
+simple, with no handling of permissions or errors):</p>
+<pre><code><span class='ocaml-keyword-other'>module</span><span class='ocaml-source'> </span><span class='ocaml-keyword-other'>type</span><span class='ocaml-source'> </span><span class='ocaml-constant-language-capital-identifier'>FS</span><span class='ocaml-source'> </span><span class='ocaml-keyword-operator'>=</span><span class='ocaml-source'> </span><span class='ocaml-keyword-other'>sig</span><span class='ocaml-source'>
+</span><span class='ocaml-source'>  </span><span class='ocaml-keyword'>val</span><span class='ocaml-source'> </span><span class='ocaml-entity-name-function-binding'>read_file</span><span class='ocaml-source'> : path:string -&gt; string option
+</span><span class='ocaml-source'>  </span><span class='ocaml-keyword'>val</span><span class='ocaml-source'> </span><span class='ocaml-entity-name-function-binding'>write_file</span><span class='ocaml-source'> : path:string -&gt; content:string -&gt; unit 
+</span><span class='ocaml-keyword-other'>end</span><span class='ocaml-source'>
+</span></code></pre>
+<p>The second one simply allows logging to standard output (also very
+basic, without support for log levels):</p>
+<pre><code><span class='ocaml-keyword-other'>module</span><span class='ocaml-source'> </span><span class='ocaml-keyword-other'>type</span><span class='ocaml-source'> </span><span class='ocaml-constant-language-capital-identifier'>CONSOLE</span><span class='ocaml-source'> </span><span class='ocaml-keyword-operator'>=</span><span class='ocaml-source'> </span><span class='ocaml-keyword-other'>sig</span><span class='ocaml-source'>
+</span><span class='ocaml-source'>  </span><span class='ocaml-keyword'>val</span><span class='ocaml-source'> </span><span class='ocaml-entity-name-function-binding'>log</span><span class='ocaml-source'> : string -&gt; unit
+</span><span class='ocaml-keyword-other'>end</span><span class='ocaml-source'>
+</span></code></pre>
+<p>The first way to depend on <strong>both signatures</strong> is to introduce a new
+signature that describes their combination:</p>
+<pre><code><span class='ocaml-keyword-other'>module</span><span class='ocaml-source'> </span><span class='ocaml-keyword-other'>type</span><span class='ocaml-source'> </span><span class='ocaml-constant-language-capital-identifier'>FS_CONSOLE</span><span class='ocaml-source'> </span><span class='ocaml-keyword-operator'>=</span><span class='ocaml-source'> </span><span class='ocaml-keyword-other'>sig</span><span class='ocaml-source'> 
+</span><span class='ocaml-source'>  </span><span class='ocaml-keyword-other-ocaml'>include</span><span class='ocaml-source'> FS
+</span><span class='ocaml-source'>  </span><span class='ocaml-keyword-other-ocaml'>include</span><span class='ocaml-source'> CONSOLE
+</span><span class='ocaml-keyword-other'>end</span><span class='ocaml-source'>
+</span><span class='ocaml-source'>
+</span><span class='ocaml-keyword'>let</span><span class='ocaml-source'> </span><span class='ocaml-entity-name-function-binding'>show_content</span><span class='ocaml-source'> </span><span class='ocaml-source'>(</span><span class='ocaml-keyword-other'>module</span><span class='ocaml-source'> </span><span class='ocaml-constant-language-capital-identifier'>H</span><span class='ocaml-source'> </span><span class='ocaml-keyword-other-ocaml punctuation-other-colon punctuation'>:</span><span class='ocaml-source'> </span><span class='ocaml-constant-language-capital-identifier'>FS_CONSOLE</span><span class='ocaml-source'>)</span><span class='ocaml-source'> </span><span class='ocaml-keyword-operator'>=</span><span class='ocaml-source'> 
+</span><span class='ocaml-source'>  </span><span class='ocaml-keyword-other'>match</span><span class='ocaml-source'> </span><span class='ocaml-constant-language-capital-identifier'>H</span><span class='ocaml-keyword-other-ocaml punctuation-other-period punctuation-separator'>.</span><span class='ocaml-source'>read_file</span><span class='ocaml-source'> ~</span><span class='ocaml-source'>path</span><span class='ocaml-keyword-other-ocaml punctuation-other-colon punctuation'>:</span><span class='ocaml-string-quoted-double'>&quot;</span><span class='ocaml-string-quoted-double'>/foo/bar</span><span class='ocaml-string-quoted-double'>&quot;</span><span class='ocaml-source'> </span><span class='ocaml-keyword-other'>with</span><span class='ocaml-source'>
+</span><span class='ocaml-source'>  </span><span class='ocaml-keyword-other'>|</span><span class='ocaml-source'> </span><span class='ocaml-constant-language-capital-identifier'>None</span><span class='ocaml-source'> </span><span class='ocaml-keyword-operator'>-&gt;</span><span class='ocaml-source'> </span><span class='ocaml-constant-language-capital-identifier'>H</span><span class='ocaml-keyword-other-ocaml punctuation-other-period punctuation-separator'>.</span><span class='ocaml-source'>log</span><span class='ocaml-source'> </span><span class='ocaml-string-quoted-double'>&quot;</span><span class='ocaml-string-quoted-double'>Nothing</span><span class='ocaml-string-quoted-double'>&quot;</span><span class='ocaml-source'>
+</span><span class='ocaml-source'>  </span><span class='ocaml-keyword-other'>|</span><span class='ocaml-source'> </span><span class='ocaml-constant-language-capital-identifier'>Some</span><span class='ocaml-source'> </span><span class='ocaml-source'>x</span><span class='ocaml-source'> </span><span class='ocaml-keyword-operator'>-&gt;</span><span class='ocaml-source'> </span><span class='ocaml-constant-language-capital-identifier'>H</span><span class='ocaml-keyword-other-ocaml punctuation-other-period punctuation-separator'>.</span><span class='ocaml-source'>log</span><span class='ocaml-source'> </span><span class='ocaml-source'>x</span><span class='ocaml-source'>
+</span></code></pre>
+<p>Or simply take the dependencies as two separate parameters:</p>
+<pre><code><span class='ocaml-keyword'>let</span><span class='ocaml-source'> </span><span class='ocaml-entity-name-function-binding'>show_content</span><span class='ocaml-source'> </span><span class='ocaml-source'>(</span><span class='ocaml-keyword-other'>module</span><span class='ocaml-source'> </span><span class='ocaml-constant-language-capital-identifier'>F</span><span class='ocaml-source'> </span><span class='ocaml-keyword-other-ocaml punctuation-other-colon punctuation'>:</span><span class='ocaml-source'> </span><span class='ocaml-constant-language-capital-identifier'>FS</span><span class='ocaml-source'>)</span><span class='ocaml-source'> </span><span class='ocaml-source'>(</span><span class='ocaml-keyword-other'>module</span><span class='ocaml-source'> </span><span class='ocaml-constant-language-capital-identifier'>C</span><span class='ocaml-source'> </span><span class='ocaml-keyword-other-ocaml punctuation-other-colon punctuation'>:</span><span class='ocaml-source'> </span><span class='ocaml-constant-language-capital-identifier'>CONSOLE</span><span class='ocaml-source'>)</span><span class='ocaml-source'>  </span><span class='ocaml-keyword-operator'>=</span><span class='ocaml-source'> 
+</span><span class='ocaml-source'>  </span><span class='ocaml-keyword-other'>match</span><span class='ocaml-source'> </span><span class='ocaml-constant-language-capital-identifier'>F</span><span class='ocaml-keyword-other-ocaml punctuation-other-period punctuation-separator'>.</span><span class='ocaml-source'>read_file</span><span class='ocaml-source'> ~</span><span class='ocaml-source'>path</span><span class='ocaml-keyword-other-ocaml punctuation-other-colon punctuation'>:</span><span class='ocaml-string-quoted-double'>&quot;</span><span class='ocaml-string-quoted-double'>/foo/bar</span><span class='ocaml-string-quoted-double'>&quot;</span><span class='ocaml-source'> </span><span class='ocaml-keyword-other'>with</span><span class='ocaml-source'>
+</span><span class='ocaml-source'>  </span><span class='ocaml-keyword-other'>|</span><span class='ocaml-source'> </span><span class='ocaml-constant-language-capital-identifier'>None</span><span class='ocaml-source'> </span><span class='ocaml-keyword-operator'>-&gt;</span><span class='ocaml-source'> </span><span class='ocaml-constant-language-capital-identifier'>C</span><span class='ocaml-keyword-other-ocaml punctuation-other-period punctuation-separator'>.</span><span class='ocaml-source'>log</span><span class='ocaml-source'> </span><span class='ocaml-string-quoted-double'>&quot;</span><span class='ocaml-string-quoted-double'>Nothing</span><span class='ocaml-string-quoted-double'>&quot;</span><span class='ocaml-source'>
+</span><span class='ocaml-source'>  </span><span class='ocaml-keyword-other'>|</span><span class='ocaml-source'> </span><span class='ocaml-constant-language-capital-identifier'>Some</span><span class='ocaml-source'> </span><span class='ocaml-source'>x</span><span class='ocaml-source'> </span><span class='ocaml-keyword-operator'>-&gt;</span><span class='ocaml-source'> </span><span class='ocaml-constant-language-capital-identifier'>C</span><span class='ocaml-keyword-other-ocaml punctuation-other-period punctuation-separator'>.</span><span class='ocaml-source'>log</span><span class='ocaml-source'> </span><span class='ocaml-source'>x</span><span class='ocaml-source'>
+</span></code></pre>
+<p>Indeed, constructing the module on the fly, directly in the function
+definition, is not possible. Although very verbose, this expression is
+rejected by the compiler:</p>
+<pre><code><span class='ocaml-keyword-other'>#</span><span class='ocaml-source'> </span><span class='ocaml-keyword'>let</span><span class='ocaml-source'> </span><span class='ocaml-entity-name-function-binding'>show_content</span><span class='ocaml-source'> </span><span class='ocaml-source'>(</span><span class='ocaml-keyword-other'>module</span><span class='ocaml-source'> </span><span class='ocaml-constant-language-capital-identifier'>H</span><span class='ocaml-source'> </span><span class='ocaml-keyword-other-ocaml punctuation-other-colon punctuation'>:</span><span class='ocaml-source'> </span><span class='ocaml-keyword-other'>sig</span><span class='ocaml-source'> 
+</span><span class='ocaml-source'>        </span><span class='ocaml-keyword-other-ocaml'>include</span><span class='ocaml-source'> FS
+</span><span class='ocaml-source'>        </span><span class='ocaml-keyword-other-ocaml'>include</span><span class='ocaml-source'> CONSOLE
+</span><span class='ocaml-source'>      </span><span class='ocaml-keyword-other'>end</span><span class='ocaml-source'>)</span><span class='ocaml-source'> </span><span class='ocaml-keyword-operator'>=</span><span class='ocaml-source'>
+</span><span class='ocaml-source'>    </span><span class='ocaml-keyword-other'>match</span><span class='ocaml-source'> </span><span class='ocaml-constant-language-capital-identifier'>H</span><span class='ocaml-keyword-other-ocaml punctuation-other-period punctuation-separator'>.</span><span class='ocaml-source'>read_file</span><span class='ocaml-source'> ~</span><span class='ocaml-source'>path</span><span class='ocaml-keyword-other-ocaml punctuation-other-colon punctuation'>:</span><span class='ocaml-string-quoted-double'>&quot;</span><span class='ocaml-string-quoted-double'>/foo/bar</span><span class='ocaml-string-quoted-double'>&quot;</span><span class='ocaml-source'> </span><span class='ocaml-keyword-other'>with</span><span class='ocaml-source'>
+</span><span class='ocaml-source'>    </span><span class='ocaml-keyword-other'>|</span><span class='ocaml-source'> </span><span class='ocaml-constant-language-capital-identifier'>None</span><span class='ocaml-source'> </span><span class='ocaml-keyword-operator'>-&gt;</span><span class='ocaml-source'> </span><span class='ocaml-constant-language-capital-identifier'>H</span><span class='ocaml-keyword-other-ocaml punctuation-other-period punctuation-separator'>.</span><span class='ocaml-source'>log</span><span class='ocaml-source'> </span><span class='ocaml-string-quoted-double'>&quot;</span><span class='ocaml-string-quoted-double'>Nothing</span><span class='ocaml-string-quoted-double'>&quot;</span><span class='ocaml-source'>
+</span><span class='ocaml-source'>    </span><span class='ocaml-keyword-other'>|</span><span class='ocaml-source'> </span><span class='ocaml-constant-language-capital-identifier'>Some</span><span class='ocaml-source'> </span><span class='ocaml-source'>x</span><span class='ocaml-source'> </span><span class='ocaml-keyword-operator'>-&gt;</span><span class='ocaml-source'> </span><span class='ocaml-constant-language-capital-identifier'>H</span><span class='ocaml-keyword-other-ocaml punctuation-other-period punctuation-separator'>.</span><span class='ocaml-source'>log</span><span class='ocaml-source'> </span><span class='ocaml-source'>x</span><span class='ocaml-source'> </span><span class='ocaml-keyword-other-ocaml punctuation-separator-terminator punctuation-separator'>;</span><span class='ocaml-keyword-other-ocaml punctuation-separator-terminator punctuation-separator'>;</span><span class='ocaml-source'>
+</span><span class='ocaml-constant-language-capital-identifier'>Lines</span><span class='ocaml-source'> </span><span class='ocaml-constant-numeric-decimal-integer'>1</span><span class='ocaml-keyword-operator'>-</span><span class='ocaml-constant-numeric-decimal-integer'>4</span><span class='ocaml-keyword-other-ocaml punctuation-comma punctuation-separator'>,</span><span class='ocaml-source'> </span><span class='ocaml-source'>characters</span><span class='ocaml-source'> </span><span class='ocaml-constant-numeric-decimal-integer'>30</span><span class='ocaml-keyword-operator'>-</span><span class='ocaml-constant-numeric-decimal-integer'>10</span><span class='ocaml-keyword-other-ocaml punctuation-other-colon punctuation'>:</span><span class='ocaml-source'>
+</span><span class='ocaml-constant-language-capital-identifier'>Error</span><span class='ocaml-keyword-other-ocaml punctuation-other-colon punctuation'>:</span><span class='ocaml-source'> </span><span class='ocaml-constant-language-capital-identifier'>Syntax</span><span class='ocaml-source'> </span><span class='ocaml-source'>error</span><span class='ocaml-keyword-other-ocaml punctuation-other-colon punctuation'>:</span><span class='ocaml-source'> </span><span class='ocaml-source'>invalid</span><span class='ocaml-source'> </span><span class='ocaml-source'>package</span><span class='ocaml-source'> </span><span class='ocaml-keyword-other'>type</span><span class='ocaml-keyword-other-ocaml punctuation-other-colon punctuation'>:</span><span class='ocaml-source'> </span><span class='ocaml-source'>only</span><span class='ocaml-source'> </span><span class='ocaml-keyword-other'>module</span><span class='ocaml-source'> </span><span class='ocaml-keyword-other'>type</span><span class='ocaml-source'> </span><span class='ocaml-source'>identifier</span><span class='ocaml-source'> </span><span class='ocaml-keyword-other'>and</span><span class='ocaml-source'> </span><span class='ocaml-keyword-other'>with</span><span class='ocaml-source'> </span><span class='ocaml-keyword-other'>type</span><span class='ocaml-source'> </span><span class='ocaml-source'>constraints</span><span class='ocaml-source'> </span><span class='ocaml-source'>are</span><span class='ocaml-source'> </span><span class='ocaml-source'>supported</span><span class='ocaml-source'>
+</span></code></pre>
+<p>Moreover, beyond the syntactic heaviness, I find the loss of type
+inference quite restrictive. While in situations where you don’t need
+to separate and diversify dependency types this isn’t a big deal, I
+find that this approach sometimes forces unnecessary groupings. I
+often ended up in situations where, for all functions that had
+dependencies, I had to provide a single module containing them all,
+which occasionally forced me, in testing scenarios, to create <em>dummy</em>
+functions. A very frustrating experience!</p>
+<h3 id="using-user-defined-effects"><a class="anchor" aria-hidden="true" href="#using-user-defined-effects"></a>Using User-Defined-Effects</h3>
+<p>I proudly claimed that dependency injection is a special case of using
+an <em>Effect System</em>, so one might wonder: could using OCaml’s effect
+system be a good idea? From my understanding, the integration of
+effects was primarily intended to describe interactions with OCaml’s
+new multi-core runtime. In practice, the lack of a type system
+tracking effects makes, in my view, their use for dependency injection
+rather cumbersome. Indeed, without a type system, it becomes, once
+again in my view, difficult to mentally keep track of which effects
+have been properly handled. In
+<a href="https://github.com/xhtmlboi/yocaml">YOCaml</a>, we recorded effects in a
+module called
+<a href="https://github.com/xhtmlboi/yocaml/blob/main/lib/core/eff.mli">Eff</a>
+that encodes programs capable of propagating effects in a monad (a
+kind of IO monad). This allows us to handle programs <em>a posteriori</em>
+(and thus inject dependencies, of course) but restricts us in terms of
+handler modularity. Indeed, it assumes that in <strong>all cases, all
+effects will be interpreted</strong>. And, in the specific case of YOCaml, we
+usually only want to either continue the program or discard the
+continuation (which can be done trivially using an
+exception). Control-flow management is therefore a very powerful tool,
+for which we have very little use.</p>
+<p>In practice, there are scenarios where using OCaml’s effects seems
+perfectly legitimate (and I think I have fairly clear ideas about why
+introducing a type system for effects is far from trivial,
+particularly in terms of user experience):</p>
+<ul>
+<li>When you want to perform backtracking</li>
+<li>When you want to express concurrency libraries, schedulers, etc.,
+which makes a lot of sense in libraries like
+<a href="https://github.com/ocaml-multicore/eio">Eio</a>,
+<a href="https://github.com/robur-coop/miou">Miou</a>, or
+<a href="https://github.com/ocaml-multicore/picos">Picos</a></li>
+</ul>
+<p>So, in the specific case of dependency injection, I have the intuition
+that using OCaml’s effects <strong>gives too much power</strong>, while putting
+significant pressure on tracking effects without compiler assistance,
+making them not entirely suitable.</p>
+<h2 id="using-objects"><a class="anchor" aria-hidden="true" href="#using-objects"></a>Using objects</h2>
+<p>It’s not very original to use objects to encode a pattern typically
+associated with object-oriented programming. However, in functional
+programming, it’s quite common to encounter encodings of dependency
+injection sometimes referred to as <a href="https://www.destroyallsoftware.com/screencasts/catalog/functional-core-imperative-shell"><em>Functional Core, Imperative
+Shell</em></a>. Although
+relatively little used and sometimes unfairly criticized, OCaml’s
+object model is actually very pleasant to work with (its theoretical
+foundation is even extensively praised in <a href="https://xvw.lol/en/articles/why-ocaml.html#closely-related-to-research">Xavier’s
+article</a>,
+in the section <em>Closely related to research</em>). To my knowledge, OCaml
+is one of the rare <em>mainstream languages</em> that draws a very clear
+separation between <strong>objects</strong>, <strong>classes</strong>, and <strong>types</strong>. Objects
+are <em>values</em>, classes are <em>definitions for constructing objects</em>, and
+objects have <em>object types</em>, which are regular types, whereas classes
+also have types that are not regular, since classes are not regular
+expressions but rather expressions of a small class language.</p>
+<p>In order to integrate coherently into OCaml and with type inference,
+the object model relies on four ingredients: <strong>structural object
+types</strong> (object types are structural, their structure is transparent),
+<strong>row variables</strong>, <strong>equi-recursive types</strong>, and <strong>type
+abbreviations</strong>.</p>
+<blockquote>
+<p>In practice, an object type is made up of <strong>the row of visible
+members</strong> (associated with their types) and may end with a <strong>row
+variable</strong> (to characterize closed/open object types). This row
+variable can serve as the subject of unification as objects are used
+together with their types.</p>
+</blockquote>
+<p>A quick way to become aware of the presence of the row variable is to
+simply write a function that takes an object as an argument and sends
+it a message (in OCaml, sending a message is written with the syntax
+<code>obj # message</code>):</p>
+<pre><code><span class='ocaml-keyword-other'>#</span><span class='ocaml-source'> </span><span class='ocaml-keyword'>let</span><span class='ocaml-source'> </span><span class='ocaml-entity-name-function-binding'>f</span><span class='ocaml-source'> </span><span class='ocaml-source'>obj</span><span class='ocaml-source'> </span><span class='ocaml-keyword-operator'>=</span><span class='ocaml-source'> </span><span class='ocaml-source'>(</span><span class='ocaml-source'>obj</span><span class='ocaml-source'> </span><span class='ocaml-keyword-other'>#</span><span class='ocaml-source'> </span><span class='ocaml-source'>foo</span><span class='ocaml-source'>)</span><span class='ocaml-source'> </span><span class='ocaml-keyword-operator'>+</span><span class='ocaml-source'> </span><span class='ocaml-constant-numeric-decimal-integer'>10</span><span class='ocaml-source'> </span><span class='ocaml-keyword-other-ocaml punctuation-separator-terminator punctuation-separator'>;</span><span class='ocaml-keyword-other-ocaml punctuation-separator-terminator punctuation-separator'>;</span><span class='ocaml-source'>
+</span><span class='ocaml-keyword-other'>val</span><span class='ocaml-source'> </span><span class='ocaml-source'>f</span><span class='ocaml-source'> </span><span class='ocaml-keyword-other-ocaml punctuation-other-colon punctuation'>:</span><span class='ocaml-source'> </span><span class='ocaml-keyword-operator'>&lt;</span><span class='ocaml-source'> </span><span class='ocaml-source'>foo</span><span class='ocaml-source'> </span><span class='ocaml-keyword-other-ocaml punctuation-other-colon punctuation'>:</span><span class='ocaml-source'> </span><span class='ocaml-support-type'>int</span><span class='ocaml-keyword-other-ocaml punctuation-separator-terminator punctuation-separator'>;</span><span class='ocaml-source'> </span><span class='ocaml-keyword-other-ocaml punctuation-other-period punctuation-separator'>.</span><span class='ocaml-keyword-other-ocaml punctuation-other-period punctuation-separator'>.</span><span class='ocaml-source'> </span><span class='ocaml-keyword-operator'>&gt;</span><span class='ocaml-source'> </span><span class='ocaml-keyword-operator'>-&gt;</span><span class='ocaml-source'> </span><span class='ocaml-support-type'>int</span><span class='ocaml-source'> </span><span class='ocaml-keyword-operator'>=</span><span class='ocaml-source'> </span><span class='ocaml-keyword-operator'>&lt;</span><span class='ocaml-keyword-other'>fun</span><span class='ocaml-keyword-operator'>&gt;</span><span class='ocaml-source'>
+</span></code></pre>
+<p>In the return type, the row variable indicating that the object type
+is open is represented by <code>&lt;..&gt;</code>. It is thanks to this variable that we
+can perform dependency injection, finely tracked by the type system
+and guided by inference.</p>
+<h3 id="simple-example"><a class="anchor" aria-hidden="true" href="#simple-example"></a>Simple example</h3>
+<p>To keep things simple, let’s just revisit the classic <em>teletype</em>
+example, which we could write in <em>direct style</em> like this:</p>
+<pre><code><span class='ocaml-keyword-other'>#</span><span class='ocaml-source'> </span><span class='ocaml-keyword'>let</span><span class='ocaml-source'> </span><span class='ocaml-entity-name-function-binding'>teletype_example</span><span class='ocaml-source'> </span><span class='ocaml-constant-language-unit'>()</span><span class='ocaml-source'> </span><span class='ocaml-keyword-operator'>=</span><span class='ocaml-source'> 
+</span><span class='ocaml-source'>    </span><span class='ocaml-source'>print_endline</span><span class='ocaml-source'> </span><span class='ocaml-string-quoted-double'>&quot;</span><span class='ocaml-string-quoted-double'>Hello, World!</span><span class='ocaml-string-quoted-double'>&quot;</span><span class='ocaml-keyword-other-ocaml punctuation-separator-terminator punctuation-separator'>;</span><span class='ocaml-source'>
+</span><span class='ocaml-source'>    </span><span class='ocaml-source'>print_endline</span><span class='ocaml-source'> </span><span class='ocaml-string-quoted-double'>&quot;</span><span class='ocaml-string-quoted-double'>What is your name?</span><span class='ocaml-string-quoted-double'>&quot;</span><span class='ocaml-keyword-other-ocaml punctuation-separator-terminator punctuation-separator'>;</span><span class='ocaml-source'>
+</span><span class='ocaml-source'>    </span><span class='ocaml-keyword'>let</span><span class='ocaml-source'> </span><span class='ocaml-entity-name-function-binding'>name</span><span class='ocaml-source'> </span><span class='ocaml-keyword-operator'>=</span><span class='ocaml-source'> </span><span class='ocaml-source'>read_line</span><span class='ocaml-source'> </span><span class='ocaml-constant-language-unit'>()</span><span class='ocaml-source'> </span><span class='ocaml-keyword-other'>in</span><span class='ocaml-source'> 
+</span><span class='ocaml-source'>    </span><span class='ocaml-source'>print_endline</span><span class='ocaml-source'> </span><span class='ocaml-source'>(</span><span class='ocaml-string-quoted-double'>&quot;</span><span class='ocaml-string-quoted-double'>Hello </span><span class='ocaml-string-quoted-double'>&quot;</span><span class='ocaml-source'> </span><span class='ocaml-keyword-operator'>^</span><span class='ocaml-source'> </span><span class='ocaml-source'>name</span><span class='ocaml-source'>)</span><span class='ocaml-source'>
+</span><span class='ocaml-keyword-other'>val</span><span class='ocaml-source'> </span><span class='ocaml-source'>teletype_example</span><span class='ocaml-source'> </span><span class='ocaml-keyword-other-ocaml punctuation-other-colon punctuation'>:</span><span class='ocaml-source'> </span><span class='ocaml-support-type'>unit</span><span class='ocaml-source'> </span><span class='ocaml-keyword-operator'>-&gt;</span><span class='ocaml-source'> </span><span class='ocaml-support-type'>unit</span><span class='ocaml-source'> </span><span class='ocaml-keyword-operator'>=</span><span class='ocaml-source'> </span><span class='ocaml-keyword-operator'>&lt;</span><span class='ocaml-keyword-other'>fun</span><span class='ocaml-keyword-operator'>&gt;</span><span class='ocaml-source'>
+</span></code></pre>
+<p>Let’s rewrite our example by taking an object as an argument, which
+will serve as the handler:</p>
+<pre><code><span class='ocaml-keyword-other'>#</span><span class='ocaml-source'> </span><span class='ocaml-keyword'>let</span><span class='ocaml-source'> </span><span class='ocaml-entity-name-function-binding'>teletype_example</span><span class='ocaml-source'> </span><span class='ocaml-source'>handler</span><span class='ocaml-source'> </span><span class='ocaml-keyword-operator'>=</span><span class='ocaml-source'> 
+</span><span class='ocaml-source'>    </span><span class='ocaml-source'>handler</span><span class='ocaml-keyword-other'>#</span><span class='ocaml-source'>print_endline</span><span class='ocaml-source'> </span><span class='ocaml-string-quoted-double'>&quot;</span><span class='ocaml-string-quoted-double'>Hello, World</span><span class='ocaml-string-quoted-double'>&quot;</span><span class='ocaml-keyword-other-ocaml punctuation-separator-terminator punctuation-separator'>;</span><span class='ocaml-source'>
+</span><span class='ocaml-source'>    </span><span class='ocaml-source'>handler</span><span class='ocaml-keyword-other'>#</span><span class='ocaml-source'>print_endline</span><span class='ocaml-source'> </span><span class='ocaml-string-quoted-double'>&quot;</span><span class='ocaml-string-quoted-double'>What is your name?</span><span class='ocaml-string-quoted-double'>&quot;</span><span class='ocaml-keyword-other-ocaml punctuation-separator-terminator punctuation-separator'>;</span><span class='ocaml-source'>
+</span><span class='ocaml-source'>    </span><span class='ocaml-keyword'>let</span><span class='ocaml-source'> </span><span class='ocaml-entity-name-function-binding'>name</span><span class='ocaml-source'> </span><span class='ocaml-keyword-operator'>=</span><span class='ocaml-source'> </span><span class='ocaml-source'>handler</span><span class='ocaml-keyword-other'>#</span><span class='ocaml-source'>read_line</span><span class='ocaml-source'> </span><span class='ocaml-constant-language-unit'>()</span><span class='ocaml-source'> </span><span class='ocaml-keyword-other'>in</span><span class='ocaml-source'>
+</span><span class='ocaml-source'>    </span><span class='ocaml-source'>handler</span><span class='ocaml-keyword-other'>#</span><span class='ocaml-source'>print_endline</span><span class='ocaml-source'> </span><span class='ocaml-source'>(</span><span class='ocaml-string-quoted-double'>&quot;</span><span class='ocaml-string-quoted-double'>Hello </span><span class='ocaml-string-quoted-double'>&quot;</span><span class='ocaml-source'> </span><span class='ocaml-keyword-operator'>^</span><span class='ocaml-source'> </span><span class='ocaml-source'>name</span><span class='ocaml-source'>)</span><span class='ocaml-source'>
+</span><span class='ocaml-keyword-other'>val</span><span class='ocaml-source'> </span><span class='ocaml-source'>teletype_example</span><span class='ocaml-source'> </span><span class='ocaml-keyword-other-ocaml punctuation-other-colon punctuation'>:</span><span class='ocaml-source'>
+</span><span class='ocaml-source'>  </span><span class='ocaml-keyword-operator'>&lt;</span><span class='ocaml-source'> </span><span class='ocaml-source'>print_endline</span><span class='ocaml-source'> </span><span class='ocaml-keyword-other-ocaml punctuation-other-colon punctuation'>:</span><span class='ocaml-source'> </span><span class='ocaml-support-type'>string</span><span class='ocaml-source'> </span><span class='ocaml-keyword-operator'>-&gt;</span><span class='ocaml-source'> </span><span class='ocaml-storage-type'>'a</span><span class='ocaml-keyword-other-ocaml punctuation-separator-terminator punctuation-separator'>;</span><span class='ocaml-source'> </span><span class='ocaml-source'>read_line</span><span class='ocaml-source'> </span><span class='ocaml-keyword-other-ocaml punctuation-other-colon punctuation'>:</span><span class='ocaml-source'> </span><span class='ocaml-support-type'>unit</span><span class='ocaml-source'> </span><span class='ocaml-keyword-operator'>-&gt;</span><span class='ocaml-source'> </span><span class='ocaml-support-type'>string</span><span class='ocaml-keyword-other-ocaml punctuation-separator-terminator punctuation-separator'>;</span><span class='ocaml-source'> </span><span class='ocaml-keyword-other-ocaml punctuation-other-period punctuation-separator'>.</span><span class='ocaml-keyword-other-ocaml punctuation-other-period punctuation-separator'>.</span><span class='ocaml-source'> </span><span class='ocaml-keyword-operator'>&gt;</span><span class='ocaml-source'> </span><span class='ocaml-keyword-operator'>-&gt;</span><span class='ocaml-source'> </span><span class='ocaml-storage-type'>'a</span><span class='ocaml-source'> </span><span class='ocaml-keyword-operator'>=</span><span class='ocaml-source'>
+</span><span class='ocaml-source'>  </span><span class='ocaml-keyword-operator'>&lt;</span><span class='ocaml-keyword-other'>fun</span><span class='ocaml-keyword-operator'>&gt;</span><span class='ocaml-source'>
+</span></code></pre>
+<p>To convince ourselves of the compositionality of our dependency
+injection, let’s imagine the following function, whose role is to
+simply <em>log</em> traces of the execution:</p>
+<pre><code><span class='ocaml-keyword-other'>#</span><span class='ocaml-source'> </span><span class='ocaml-keyword'>let</span><span class='ocaml-source'> </span><span class='ocaml-entity-name-function-binding'>log</span><span class='ocaml-source'> </span><span class='ocaml-source'>handler</span><span class='ocaml-source'> ~</span><span class='ocaml-source'>level</span><span class='ocaml-source'> </span><span class='ocaml-source'>message</span><span class='ocaml-source'> </span><span class='ocaml-keyword-operator'>=</span><span class='ocaml-source'> 
+</span><span class='ocaml-source'>    </span><span class='ocaml-source'>handler</span><span class='ocaml-keyword-other'>#</span><span class='ocaml-source'>do_log</span><span class='ocaml-source'> </span><span class='ocaml-source'>level</span><span class='ocaml-source'> </span><span class='ocaml-source'>message</span><span class='ocaml-source'>
+</span><span class='ocaml-keyword-other'>val</span><span class='ocaml-source'> </span><span class='ocaml-source'>log</span><span class='ocaml-source'> </span><span class='ocaml-keyword-other-ocaml punctuation-other-colon punctuation'>:</span><span class='ocaml-source'> </span><span class='ocaml-keyword-operator'>&lt;</span><span class='ocaml-source'> </span><span class='ocaml-source'>do_log</span><span class='ocaml-source'> </span><span class='ocaml-keyword-other-ocaml punctuation-other-colon punctuation'>:</span><span class='ocaml-source'> </span><span class='ocaml-storage-type'>'a</span><span class='ocaml-source'> </span><span class='ocaml-keyword-operator'>-&gt;</span><span class='ocaml-source'> </span><span class='ocaml-storage-type'>'b</span><span class='ocaml-source'> </span><span class='ocaml-keyword-operator'>-&gt;</span><span class='ocaml-source'> </span><span class='ocaml-storage-type'>'c</span><span class='ocaml-keyword-other-ocaml punctuation-separator-terminator punctuation-separator'>;</span><span class='ocaml-source'> </span><span class='ocaml-keyword-other-ocaml punctuation-other-period punctuation-separator'>.</span><span class='ocaml-keyword-other-ocaml punctuation-other-period punctuation-separator'>.</span><span class='ocaml-source'> </span><span class='ocaml-keyword-operator'>&gt;</span><span class='ocaml-source'> </span><span class='ocaml-keyword-operator'>-&gt;</span><span class='ocaml-source'> </span><span class='ocaml-source'>level</span><span class='ocaml-keyword-other-ocaml punctuation-other-colon punctuation'>:</span><span class='ocaml-storage-type'>'a</span><span class='ocaml-source'> </span><span class='ocaml-keyword-operator'>-&gt;</span><span class='ocaml-source'> </span><span class='ocaml-storage-type'>'b</span><span class='ocaml-source'> </span><span class='ocaml-keyword-operator'>-&gt;</span><span class='ocaml-source'> </span><span class='ocaml-storage-type'>'c</span><span class='ocaml-source'> </span><span class='ocaml-keyword-operator'>=</span><span class='ocaml-source'> </span><span class='ocaml-keyword-operator'>&lt;</span><span class='ocaml-keyword-other'>fun</span><span class='ocaml-keyword-operator'>&gt;</span><span class='ocaml-source'>
+</span></code></pre>
+<p>By using the <code>teletype_example</code> and <code>log</code> functions, we can directly
+observe the precision of the elision, showing that our <code>handler</code>
+object was open each time:</p>
+<pre><code><span class='ocaml-keyword-other'>#</span><span class='ocaml-source'> </span><span class='ocaml-keyword'>let</span><span class='ocaml-source'> </span><span class='ocaml-entity-name-function-binding'>using_both</span><span class='ocaml-source'> </span><span class='ocaml-source'>handler</span><span class='ocaml-source'> </span><span class='ocaml-keyword-operator'>=</span><span class='ocaml-source'> 
+</span><span class='ocaml-source'>    </span><span class='ocaml-keyword-other'>let</span><span class='ocaml-source'> </span><span class='ocaml-constant-language-unit'>()</span><span class='ocaml-source'> </span><span class='ocaml-keyword-operator'>=</span><span class='ocaml-source'> </span><span class='ocaml-source'>log</span><span class='ocaml-source'> </span><span class='ocaml-source'>handler</span><span class='ocaml-source'> ~</span><span class='ocaml-source'>level</span><span class='ocaml-keyword-other-ocaml punctuation-other-colon punctuation'>:</span><span class='ocaml-string-quoted-double'>&quot;</span><span class='ocaml-string-quoted-double'>debug</span><span class='ocaml-string-quoted-double'>&quot;</span><span class='ocaml-source'> </span><span class='ocaml-string-quoted-double'>&quot;</span><span class='ocaml-string-quoted-double'>Start teletype example</span><span class='ocaml-string-quoted-double'>&quot;</span><span class='ocaml-source'> </span><span class='ocaml-keyword-other'>in</span><span class='ocaml-source'>
+</span><span class='ocaml-source'>    </span><span class='ocaml-source'>teletype_example</span><span class='ocaml-source'> </span><span class='ocaml-source'>handler</span><span class='ocaml-source'>
+</span><span class='ocaml-keyword-other'>val</span><span class='ocaml-source'> </span><span class='ocaml-source'>using_both</span><span class='ocaml-source'> </span><span class='ocaml-keyword-other-ocaml punctuation-other-colon punctuation'>:</span><span class='ocaml-source'>
+</span><span class='ocaml-source'>  </span><span class='ocaml-keyword-operator'>&lt;</span><span class='ocaml-source'> </span><span class='ocaml-source'>do_log</span><span class='ocaml-source'> </span><span class='ocaml-keyword-other-ocaml punctuation-other-colon punctuation'>:</span><span class='ocaml-source'> </span><span class='ocaml-support-type'>string</span><span class='ocaml-source'> </span><span class='ocaml-keyword-operator'>-&gt;</span><span class='ocaml-source'> </span><span class='ocaml-support-type'>string</span><span class='ocaml-source'> </span><span class='ocaml-keyword-operator'>-&gt;</span><span class='ocaml-source'> </span><span class='ocaml-support-type'>unit</span><span class='ocaml-keyword-other-ocaml punctuation-separator-terminator punctuation-separator'>;</span><span class='ocaml-source'> </span><span class='ocaml-source'>print_endline</span><span class='ocaml-source'> </span><span class='ocaml-keyword-other-ocaml punctuation-other-colon punctuation'>:</span><span class='ocaml-source'> </span><span class='ocaml-support-type'>string</span><span class='ocaml-source'> </span><span class='ocaml-keyword-operator'>-&gt;</span><span class='ocaml-source'> </span><span class='ocaml-storage-type'>'a</span><span class='ocaml-keyword-other-ocaml punctuation-separator-terminator punctuation-separator'>;</span><span class='ocaml-source'>
+</span><span class='ocaml-source'>    </span><span class='ocaml-source'>read_line</span><span class='ocaml-source'> </span><span class='ocaml-keyword-other-ocaml punctuation-other-colon punctuation'>:</span><span class='ocaml-source'> </span><span class='ocaml-support-type'>unit</span><span class='ocaml-source'> </span><span class='ocaml-keyword-operator'>-&gt;</span><span class='ocaml-source'> </span><span class='ocaml-support-type'>string</span><span class='ocaml-keyword-other-ocaml punctuation-separator-terminator punctuation-separator'>;</span><span class='ocaml-source'> </span><span class='ocaml-keyword-other-ocaml punctuation-other-period punctuation-separator'>.</span><span class='ocaml-keyword-other-ocaml punctuation-other-period punctuation-separator'>.</span><span class='ocaml-source'> </span><span class='ocaml-keyword-operator'>&gt;</span><span class='ocaml-source'> </span><span class='ocaml-keyword-operator'>-&gt;</span><span class='ocaml-source'>
+</span><span class='ocaml-source'>  </span><span class='ocaml-storage-type'>'a</span><span class='ocaml-source'> </span><span class='ocaml-keyword-operator'>=</span><span class='ocaml-source'> </span><span class='ocaml-keyword-operator'>&lt;</span><span class='ocaml-keyword-other'>fun</span><span class='ocaml-keyword-operator'>&gt;</span><span class='ocaml-source'>
+</span></code></pre>
+<p>All the requirements of our <code>using_both</code> function are (logically)
+correctly tracked. We can now implement a <em>dummy</em> handler very simply, using
+immediate object syntax:</p>
+<pre><code><span class='ocaml-keyword-other'>#</span><span class='ocaml-source'> </span><span class='ocaml-source'>using_both</span><span class='ocaml-source'> </span><span class='ocaml-keyword-other'>object</span><span class='ocaml-source'>
+</span><span class='ocaml-source'>    </span><span class='ocaml-keyword-other'>method</span><span class='ocaml-source'> </span><span class='ocaml-source'>do_log</span><span class='ocaml-source'> </span><span class='ocaml-source'>level</span><span class='ocaml-source'> </span><span class='ocaml-source'>message</span><span class='ocaml-source'> </span><span class='ocaml-keyword-operator'>=</span><span class='ocaml-source'> 
+</span><span class='ocaml-source'>      </span><span class='ocaml-source'>print_endline</span><span class='ocaml-source'> </span><span class='ocaml-source'>(</span><span class='ocaml-string-quoted-double'>&quot;</span><span class='ocaml-string-quoted-double'>[</span><span class='ocaml-string-quoted-double'>&quot;</span><span class='ocaml-source'> </span><span class='ocaml-keyword-operator'>^</span><span class='ocaml-source'> </span><span class='ocaml-source'>level</span><span class='ocaml-source'> </span><span class='ocaml-keyword-operator'>^</span><span class='ocaml-source'> </span><span class='ocaml-string-quoted-double'>&quot;</span><span class='ocaml-string-quoted-double'>] </span><span class='ocaml-string-quoted-double'>&quot;</span><span class='ocaml-source'> </span><span class='ocaml-keyword-operator'>^</span><span class='ocaml-source'> </span><span class='ocaml-source'>message</span><span class='ocaml-source'>)</span><span class='ocaml-source'>
+</span><span class='ocaml-source'>
+</span><span class='ocaml-source'>    </span><span class='ocaml-keyword-other'>method</span><span class='ocaml-source'> </span><span class='ocaml-source'>print_endline</span><span class='ocaml-source'> </span><span class='ocaml-source'>value</span><span class='ocaml-source'> </span><span class='ocaml-keyword-operator'>=</span><span class='ocaml-source'> </span><span class='ocaml-source'>print_endline</span><span class='ocaml-source'> </span><span class='ocaml-source'>value</span><span class='ocaml-source'>
+</span><span class='ocaml-source'>    </span><span class='ocaml-keyword-other'>method</span><span class='ocaml-source'> </span><span class='ocaml-source'>read_line</span><span class='ocaml-source'> </span><span class='ocaml-constant-language-unit'>()</span><span class='ocaml-source'> </span><span class='ocaml-keyword-operator'>=</span><span class='ocaml-source'> 
+</span><span class='ocaml-source'>      </span><span class='ocaml-comment-block'>(*</span><span class='ocaml-comment-block'> Here I should read the line but hey, 
+</span><span class='ocaml-comment-block'>        it is not interactive, let's just return my name. </span><span class='ocaml-comment-block'>*)</span><span class='ocaml-source'>
+</span><span class='ocaml-source'>      </span><span class='ocaml-string-quoted-double'>&quot;</span><span class='ocaml-string-quoted-double'>Pierre</span><span class='ocaml-string-quoted-double'>&quot;</span><span class='ocaml-source'>
+</span><span class='ocaml-source'>  </span><span class='ocaml-keyword-other'>end</span><span class='ocaml-keyword-other-ocaml punctuation-separator-terminator punctuation-separator'>;</span><span class='ocaml-keyword-other-ocaml punctuation-separator-terminator punctuation-separator'>;</span><span class='ocaml-source'>
+</span><span class='ocaml-source'>[</span><span class='ocaml-source'>debug</span><span class='ocaml-source'>]</span><span class='ocaml-source'> </span><span class='ocaml-constant-language-capital-identifier'>Start</span><span class='ocaml-source'> </span><span class='ocaml-source'>teletype</span><span class='ocaml-source'> </span><span class='ocaml-source'>example</span><span class='ocaml-source'>
+</span><span class='ocaml-constant-language-capital-identifier'>Hello</span><span class='ocaml-keyword-other-ocaml punctuation-comma punctuation-separator'>,</span><span class='ocaml-source'> </span><span class='ocaml-constant-language-capital-identifier'>World</span><span class='ocaml-source'>
+</span><span class='ocaml-constant-language-capital-identifier'>What</span><span class='ocaml-source'> </span><span class='ocaml-source'>is</span><span class='ocaml-source'> </span><span class='ocaml-source'>your</span><span class='ocaml-source'> </span><span class='ocaml-source'>name</span><span class='ocaml-source'>?
+</span><span class='ocaml-constant-language-capital-identifier'>Hello</span><span class='ocaml-source'> </span><span class='ocaml-constant-language-capital-identifier'>Pierre</span><span class='ocaml-source'>
+</span><span class='ocaml-source'>
+</span><span class='ocaml-keyword-operator'>-</span><span class='ocaml-source'> </span><span class='ocaml-keyword-other-ocaml punctuation-other-colon punctuation'>:</span><span class='ocaml-source'> </span><span class='ocaml-support-type'>unit</span><span class='ocaml-source'> </span><span class='ocaml-keyword-operator'>=</span><span class='ocaml-source'> </span><span class='ocaml-constant-language-unit'>()</span><span class='ocaml-source'>
+</span></code></pre>
+<p>This approach is extremely similar to using <a href="https://ocaml.org/manual/5.3/polyvariant.html">polymorphic
+variants</a> for
+<a href="https://keleshev.com/composable-error-handling-in-ocaml">composable error
+handling</a>,
+which share many features with objects (structural subtyping, rows).</p>
+<h2 id="typing-sealing-and-reusing"><a class="anchor" aria-hidden="true" href="#typing-sealing-and-reusing"></a>Typing, sealing and reusing</h2>
+<p>In our examples, we were guided by type inference. However, in OCaml,
+it is common to restrict the generality of inference using explicit
+signatures. As we have seen, some of our inferred signatures are too
+general and arguably not very pleasant to write:</p>
+<pre><code>  &lt; do_log : string -&gt; string -&gt; unit; 
+    print_endline : string -&gt; 'a;
+    read_line : unit -&gt; string; 
+    .. 
+  &gt;
+</code></pre>
+<p>Fortunately, type abbreviations allow us to simplify this notation. By
+using <a href="https://ocaml.org/manual/5.3/classes.html#ss%3Aclasstype">class
+types</a> and
+certain abbreviations, we can simplify the type expressions of our
+functions that require injection:</p>
+<p>First, we will describe our types using dedicated class types, let's
+start with <code>console</code>:</p>
+<pre><code><span class='ocaml-keyword-other'>class</span><span class='ocaml-source'> </span><span class='ocaml-keyword-other'>type</span><span class='ocaml-source'> </span><span class='ocaml-source'>console</span><span class='ocaml-source'> </span><span class='ocaml-keyword-operator'>=</span><span class='ocaml-source'> </span><span class='ocaml-keyword-other'>object</span><span class='ocaml-source'>
+</span><span class='ocaml-source'>  </span><span class='ocaml-keyword-other'>method</span><span class='ocaml-source'> </span><span class='ocaml-source'>print_endline</span><span class='ocaml-source'> </span><span class='ocaml-keyword-other-ocaml punctuation-other-colon punctuation'>:</span><span class='ocaml-source'> </span><span class='ocaml-support-type'>string</span><span class='ocaml-source'> </span><span class='ocaml-keyword-operator'>-&gt;</span><span class='ocaml-source'> </span><span class='ocaml-support-type'>unit</span><span class='ocaml-source'>
+</span><span class='ocaml-source'>  </span><span class='ocaml-keyword-other'>method</span><span class='ocaml-source'> </span><span class='ocaml-source'>read_line</span><span class='ocaml-source'> </span><span class='ocaml-keyword-other-ocaml punctuation-other-colon punctuation'>:</span><span class='ocaml-source'> </span><span class='ocaml-support-type'>unit</span><span class='ocaml-source'> </span><span class='ocaml-keyword-operator'>-&gt;</span><span class='ocaml-source'> </span><span class='ocaml-support-type'>string</span><span class='ocaml-source'>
+</span><span class='ocaml-keyword-other'>end</span><span class='ocaml-source'>
+</span></code></pre>
+<p>Now let's write our <code>loggable</code> interface:</p>
+<pre><code><span class='ocaml-keyword-other'>class</span><span class='ocaml-source'> </span><span class='ocaml-keyword-other'>type</span><span class='ocaml-source'> </span><span class='ocaml-source'>loggable</span><span class='ocaml-source'> </span><span class='ocaml-keyword-operator'>=</span><span class='ocaml-source'> </span><span class='ocaml-keyword-other'>object</span><span class='ocaml-source'>
+</span><span class='ocaml-source'>  </span><span class='ocaml-keyword-other'>method</span><span class='ocaml-source'> </span><span class='ocaml-source'>do_log</span><span class='ocaml-source'> </span><span class='ocaml-keyword-other-ocaml punctuation-other-colon punctuation'>:</span><span class='ocaml-source'> </span><span class='ocaml-source'>level</span><span class='ocaml-keyword-other-ocaml punctuation-other-colon punctuation'>:</span><span class='ocaml-support-type'>string</span><span class='ocaml-source'> </span><span class='ocaml-keyword-operator'>-&gt;</span><span class='ocaml-source'> </span><span class='ocaml-support-type'>string</span><span class='ocaml-source'> </span><span class='ocaml-keyword-operator'>-&gt;</span><span class='ocaml-source'> </span><span class='ocaml-support-type'>unit</span><span class='ocaml-source'>
+</span><span class='ocaml-keyword-other'>end</span><span class='ocaml-source'>
+</span></code></pre>
+<p>Now, let's rewrite our three functions inside a submodule (to make
+their signatures explicit):</p>
+<pre><code><span class='ocaml-keyword-other'>module</span><span class='ocaml-source'> </span><span class='ocaml-constant-language-capital-identifier'>F</span><span class='ocaml-source'> </span><span class='ocaml-keyword-other-ocaml punctuation-other-colon punctuation'>:</span><span class='ocaml-source'> </span><span class='ocaml-keyword-other'>sig</span><span class='ocaml-source'> 
+</span><span class='ocaml-source'>  </span><span class='ocaml-keyword'>val</span><span class='ocaml-source'> </span><span class='ocaml-entity-name-function-binding'>teletype_example</span><span class='ocaml-source'> : #console -&gt; unit
+</span><span class='ocaml-source'>  </span><span class='ocaml-keyword'>val</span><span class='ocaml-source'> </span><span class='ocaml-entity-name-function-binding'>log</span><span class='ocaml-source'> : #loggable -&gt; level:string -&gt; string -&gt; unit
+</span><span class='ocaml-keyword-other'>end</span><span class='ocaml-source'> </span><span class='ocaml-keyword-operator'>=</span><span class='ocaml-source'> </span><span class='ocaml-keyword-other'>struct</span><span class='ocaml-source'>
+</span><span class='ocaml-source'>
+</span><span class='ocaml-source'>  </span><span class='ocaml-keyword'>let</span><span class='ocaml-source'> </span><span class='ocaml-entity-name-function-binding'>teletype_example</span><span class='ocaml-source'> </span><span class='ocaml-source'>handler</span><span class='ocaml-source'> </span><span class='ocaml-keyword-operator'>=</span><span class='ocaml-source'> 
+</span><span class='ocaml-source'>    </span><span class='ocaml-source'>handler</span><span class='ocaml-keyword-other'>#</span><span class='ocaml-source'>print_endline</span><span class='ocaml-source'> </span><span class='ocaml-string-quoted-double'>&quot;</span><span class='ocaml-string-quoted-double'>Hello, World</span><span class='ocaml-string-quoted-double'>&quot;</span><span class='ocaml-keyword-other-ocaml punctuation-separator-terminator punctuation-separator'>;</span><span class='ocaml-source'>
+</span><span class='ocaml-source'>    </span><span class='ocaml-source'>handler</span><span class='ocaml-keyword-other'>#</span><span class='ocaml-source'>print_endline</span><span class='ocaml-source'> </span><span class='ocaml-string-quoted-double'>&quot;</span><span class='ocaml-string-quoted-double'>What is your name?</span><span class='ocaml-string-quoted-double'>&quot;</span><span class='ocaml-keyword-other-ocaml punctuation-separator-terminator punctuation-separator'>;</span><span class='ocaml-source'>
+</span><span class='ocaml-source'>    </span><span class='ocaml-keyword'>let</span><span class='ocaml-source'> </span><span class='ocaml-entity-name-function-binding'>name</span><span class='ocaml-source'> </span><span class='ocaml-keyword-operator'>=</span><span class='ocaml-source'> </span><span class='ocaml-source'>handler</span><span class='ocaml-keyword-other'>#</span><span class='ocaml-source'>read_line</span><span class='ocaml-source'> </span><span class='ocaml-constant-language-unit'>()</span><span class='ocaml-source'> </span><span class='ocaml-keyword-other'>in</span><span class='ocaml-source'>
+</span><span class='ocaml-source'>    </span><span class='ocaml-source'>handler</span><span class='ocaml-keyword-other'>#</span><span class='ocaml-source'>print_endline</span><span class='ocaml-source'> </span><span class='ocaml-source'>(</span><span class='ocaml-string-quoted-double'>&quot;</span><span class='ocaml-string-quoted-double'>Hello </span><span class='ocaml-string-quoted-double'>&quot;</span><span class='ocaml-source'> </span><span class='ocaml-keyword-operator'>^</span><span class='ocaml-source'> </span><span class='ocaml-source'>name</span><span class='ocaml-source'>)</span><span class='ocaml-source'>
+</span><span class='ocaml-source'>    
+</span><span class='ocaml-source'>  </span><span class='ocaml-keyword'>let</span><span class='ocaml-source'> </span><span class='ocaml-entity-name-function-binding'>log</span><span class='ocaml-source'> </span><span class='ocaml-source'>handler</span><span class='ocaml-source'> ~</span><span class='ocaml-source'>level</span><span class='ocaml-source'> </span><span class='ocaml-source'>message</span><span class='ocaml-source'> </span><span class='ocaml-keyword-operator'>=</span><span class='ocaml-source'> 
+</span><span class='ocaml-source'>    </span><span class='ocaml-source'>handler</span><span class='ocaml-keyword-other'>#</span><span class='ocaml-source'>do_log</span><span class='ocaml-source'> ~</span><span class='ocaml-source'>level</span><span class='ocaml-source'> </span><span class='ocaml-source'>message</span><span class='ocaml-source'>
+</span><span class='ocaml-keyword-other'>end</span><span class='ocaml-source'>
+</span></code></pre>
+<p>And now, we can describe our <code>using_both</code> function as taking an object
+that is the conjunction of <code>loggable</code> and <code>console</code>, like this:</p>
+<pre><code><span class='ocaml-keyword-other'>module</span><span class='ocaml-source'> </span><span class='ocaml-constant-language-capital-identifier'>G</span><span class='ocaml-source'> </span><span class='ocaml-keyword-other-ocaml punctuation-other-colon punctuation'>:</span><span class='ocaml-source'> </span><span class='ocaml-keyword-other'>sig</span><span class='ocaml-source'> 
+</span><span class='ocaml-source'>  </span><span class='ocaml-keyword'>val</span><span class='ocaml-source'> </span><span class='ocaml-entity-name-function-binding'>using_both</span><span class='ocaml-source'> : &lt;console; loggable; ..&gt; -&gt; unit
+</span><span class='ocaml-keyword-other'>end</span><span class='ocaml-source'> </span><span class='ocaml-keyword-operator'>=</span><span class='ocaml-source'> </span><span class='ocaml-keyword-other'>struct</span><span class='ocaml-source'>
+</span><span class='ocaml-source'>  </span><span class='ocaml-keyword'>let</span><span class='ocaml-source'> </span><span class='ocaml-entity-name-function-binding'>using_both</span><span class='ocaml-source'> </span><span class='ocaml-source'>handler</span><span class='ocaml-source'> </span><span class='ocaml-keyword-operator'>=</span><span class='ocaml-source'> 
+</span><span class='ocaml-source'>    </span><span class='ocaml-keyword-other'>let</span><span class='ocaml-source'> </span><span class='ocaml-constant-language-unit'>()</span><span class='ocaml-source'> </span><span class='ocaml-keyword-operator'>=</span><span class='ocaml-source'> </span><span class='ocaml-constant-language-capital-identifier'>F</span><span class='ocaml-keyword-other-ocaml punctuation-other-period punctuation-separator'>.</span><span class='ocaml-source'>log</span><span class='ocaml-source'> </span><span class='ocaml-source'>handler</span><span class='ocaml-source'> ~</span><span class='ocaml-source'>level</span><span class='ocaml-keyword-other-ocaml punctuation-other-colon punctuation'>:</span><span class='ocaml-string-quoted-double'>&quot;</span><span class='ocaml-string-quoted-double'>debug</span><span class='ocaml-string-quoted-double'>&quot;</span><span class='ocaml-source'> </span><span class='ocaml-string-quoted-double'>&quot;</span><span class='ocaml-string-quoted-double'>Start teletype example</span><span class='ocaml-string-quoted-double'>&quot;</span><span class='ocaml-source'> </span><span class='ocaml-keyword-other'>in</span><span class='ocaml-source'>
+</span><span class='ocaml-source'>    </span><span class='ocaml-constant-language-capital-identifier'>F</span><span class='ocaml-keyword-other-ocaml punctuation-other-period punctuation-separator'>.</span><span class='ocaml-source'>teletype_example</span><span class='ocaml-source'> </span><span class='ocaml-source'>handler</span><span class='ocaml-source'>
+</span><span class='ocaml-keyword-other'>end</span><span class='ocaml-source'>
+</span></code></pre>
+<p>At the implementation level, the separation between inheritance (as a
+syntactic action) and subtyping (as a semantic action) allows us to
+benefit from this kind of mutualization directly at the <em>call
+site</em>. For example, let's implement a handler for <code>console</code> and
+<code>loggable</code>:</p>
+<pre><code><span class='ocaml-keyword-other'>class</span><span class='ocaml-source'> </span><span class='ocaml-source'>a_console</span><span class='ocaml-source'> </span><span class='ocaml-keyword-operator'>=</span><span class='ocaml-source'> </span><span class='ocaml-keyword-other'>object</span><span class='ocaml-source'>
+</span><span class='ocaml-source'>  </span><span class='ocaml-keyword-other'>method</span><span class='ocaml-source'> </span><span class='ocaml-source'>print_endline</span><span class='ocaml-source'> </span><span class='ocaml-source'>value</span><span class='ocaml-source'> </span><span class='ocaml-keyword-operator'>=</span><span class='ocaml-source'> </span><span class='ocaml-source'>print_endline</span><span class='ocaml-source'> </span><span class='ocaml-source'>value</span><span class='ocaml-source'>
+</span><span class='ocaml-source'>  </span><span class='ocaml-keyword-other'>method</span><span class='ocaml-source'> </span><span class='ocaml-source'>read_line</span><span class='ocaml-source'> </span><span class='ocaml-constant-language-unit'>()</span><span class='ocaml-source'> </span><span class='ocaml-keyword-operator'>=</span><span class='ocaml-source'> 
+</span><span class='ocaml-source'>    </span><span class='ocaml-comment-block'>(*</span><span class='ocaml-comment-block'> Here I should read the line but hey, 
+</span><span class='ocaml-comment-block'>       it is not interactive, let's just return my name. </span><span class='ocaml-comment-block'>*)</span><span class='ocaml-source'>
+</span><span class='ocaml-source'>    </span><span class='ocaml-string-quoted-double'>&quot;</span><span class='ocaml-string-quoted-double'>Pierre</span><span class='ocaml-string-quoted-double'>&quot;</span><span class='ocaml-source'>
+</span><span class='ocaml-keyword-other'>end</span><span class='ocaml-source'>
+</span><span class='ocaml-source'>
+</span><span class='ocaml-keyword-other'>class</span><span class='ocaml-source'> </span><span class='ocaml-source'>a_logger</span><span class='ocaml-source'> </span><span class='ocaml-keyword-operator'>=</span><span class='ocaml-source'> </span><span class='ocaml-keyword-other'>object</span><span class='ocaml-source'>
+</span><span class='ocaml-source'>  </span><span class='ocaml-keyword-other'>method</span><span class='ocaml-source'> </span><span class='ocaml-source'>do_log</span><span class='ocaml-source'> ~</span><span class='ocaml-source'>level</span><span class='ocaml-source'> </span><span class='ocaml-source'>message</span><span class='ocaml-source'> </span><span class='ocaml-keyword-operator'>=</span><span class='ocaml-source'> 
+</span><span class='ocaml-source'>    </span><span class='ocaml-source'>print_endline</span><span class='ocaml-source'> </span><span class='ocaml-source'>(</span><span class='ocaml-string-quoted-double'>&quot;</span><span class='ocaml-string-quoted-double'>[</span><span class='ocaml-string-quoted-double'>&quot;</span><span class='ocaml-source'> </span><span class='ocaml-keyword-operator'>^</span><span class='ocaml-source'> </span><span class='ocaml-source'>level</span><span class='ocaml-source'> </span><span class='ocaml-keyword-operator'>^</span><span class='ocaml-source'> </span><span class='ocaml-string-quoted-double'>&quot;</span><span class='ocaml-string-quoted-double'>] </span><span class='ocaml-string-quoted-double'>&quot;</span><span class='ocaml-source'> </span><span class='ocaml-keyword-operator'>^</span><span class='ocaml-source'> </span><span class='ocaml-source'>message</span><span class='ocaml-source'>)</span><span class='ocaml-source'>
+</span><span class='ocaml-keyword-other'>end</span><span class='ocaml-source'>
+</span></code></pre>
+<p>Even though it would be possible to constrain our classes by the
+interfaces they implement (using <code>class x = object (_ : #interface_)</code>), it is not necessary because <strong>structural subtyping will
+handle the rest</strong> (and it also allows us to potentially introduce
+intermediate states easily). We can now <strong>use inheritance to share
+functionality</strong> between our two handlers:</p>
+<pre><code><span class='ocaml-keyword-other'>#</span><span class='ocaml-source'> </span><span class='ocaml-constant-language-capital-identifier'>G</span><span class='ocaml-keyword-other-ocaml punctuation-other-period punctuation-separator'>.</span><span class='ocaml-source'>using_both</span><span class='ocaml-source'> </span><span class='ocaml-keyword-other'>object</span><span class='ocaml-source'>
+</span><span class='ocaml-source'>    </span><span class='ocaml-keyword-other'>inherit</span><span class='ocaml-source'> </span><span class='ocaml-source'>a_console</span><span class='ocaml-source'>
+</span><span class='ocaml-source'>    </span><span class='ocaml-keyword-other'>inherit</span><span class='ocaml-source'> </span><span class='ocaml-source'>a_logger</span><span class='ocaml-source'>
+</span><span class='ocaml-source'>  </span><span class='ocaml-keyword-other'>end</span><span class='ocaml-source'> </span><span class='ocaml-keyword-other-ocaml punctuation-separator-terminator punctuation-separator'>;</span><span class='ocaml-keyword-other-ocaml punctuation-separator-terminator punctuation-separator'>;</span><span class='ocaml-source'>
+</span><span class='ocaml-source'>[</span><span class='ocaml-source'>debug</span><span class='ocaml-source'>]</span><span class='ocaml-source'> </span><span class='ocaml-constant-language-capital-identifier'>Start</span><span class='ocaml-source'> </span><span class='ocaml-source'>teletype</span><span class='ocaml-source'> </span><span class='ocaml-source'>example</span><span class='ocaml-source'>
+</span><span class='ocaml-constant-language-capital-identifier'>Hello</span><span class='ocaml-keyword-other-ocaml punctuation-comma punctuation-separator'>,</span><span class='ocaml-source'> </span><span class='ocaml-constant-language-capital-identifier'>World</span><span class='ocaml-source'>
+</span><span class='ocaml-constant-language-capital-identifier'>What</span><span class='ocaml-source'> </span><span class='ocaml-source'>is</span><span class='ocaml-source'> </span><span class='ocaml-source'>your</span><span class='ocaml-source'> </span><span class='ocaml-source'>name</span><span class='ocaml-source'>?
+</span><span class='ocaml-constant-language-capital-identifier'>Hello</span><span class='ocaml-source'> </span><span class='ocaml-constant-language-capital-identifier'>Pierre</span><span class='ocaml-source'>
+</span><span class='ocaml-source'>
+</span><span class='ocaml-keyword-operator'>-</span><span class='ocaml-source'> </span><span class='ocaml-keyword-other-ocaml punctuation-other-colon punctuation'>:</span><span class='ocaml-source'> </span><span class='ocaml-support-type'>unit</span><span class='ocaml-source'> </span><span class='ocaml-keyword-operator'>=</span><span class='ocaml-source'> </span><span class='ocaml-constant-language-unit'>()</span><span class='ocaml-source'>
+</span></code></pre>
+<p>One could argue that it’s still a bit verbose, but in my view, this
+approach offers <strong>much</strong> more convenience. We know <strong>statically</strong> the
+capabilities that need to be implemented, we retain type inference,
+and we have very simple composition tools. At this point, I have,
+<em>subjectively</em>, identified scenarios for using the different
+approaches discussed in this article:</p>
+<ul>
+<li>
+<p>When you need to control the program’s continuation (essentially for
+backtracking or concurrency), it’s preferable to use effects (hoping
+that one day we’ll be able to type them ergonomically).</p>
+</li>
+<li>
+<p>When you want to introduce types (without parametric polymorphism)
+into dependencies, <em>first-class modules</em> work very well.</p>
+</li>
+<li>
+<p>When you want to introduce types that can have type parameters (for
+example, to express the normal forms of our dependencies via a
+runtime value, e.g., through a monad),
+<a href="https://ocaml.org/manual/5.3/moduleexamples.html#s%3Afunctors">functors</a>
+are suitable.</p>
+</li>
+<li>
+<p>When you want to do <strong>simple dependency injection</strong>, guided by type
+inference and requiring the ability to fragment or share handlers,
+objects are perfectly suitable.</p>
+</li>
+</ul>
+<p>However, the approach based on first-class modules or objects can
+<strong>heavily pollute a codebase</strong>, whereas effect interpretation and
+functor instantiation can remain at the edges of the program. Let’s
+look at the final part of this article, which explains how to reduce
+the aggressive propagation of handlers.</p>
+<h2 id="injected-dependencies-as-part-of-the-environment"><a class="anchor" aria-hidden="true" href="#injected-dependencies-as-part-of-the-environment"></a>Injected dependencies as part of the environment</h2>
+<p>Currently, our approach forces us to pass our handler explicitly from
+call to call, which can drastically bloat business logic code. What we
+would like is <strong>the ability to only worry about the presence of
+dependencies when it is actually necessary</strong>. To achieve this, we’ll
+use a module whose role will be to pass our set of dependencies in an
+<em>ad-hoc</em> manner:</p>
+<pre><code><span class='ocaml-keyword-other'>module</span><span class='ocaml-source'> </span><span class='ocaml-constant-language-capital-identifier'>Env</span><span class='ocaml-source'> </span><span class='ocaml-keyword-other-ocaml punctuation-other-colon punctuation'>:</span><span class='ocaml-source'> </span><span class='ocaml-keyword-other'>sig</span><span class='ocaml-source'>
+</span><span class='ocaml-source'>  </span><span class='ocaml-keyword'>type</span><span class='ocaml-source'> </span><span class='ocaml-source'>('normal_form, 'rows) </span><span class='ocaml-entity-name-function-binding'>t</span><span class='ocaml-source'>
+</span><span class='ocaml-source'>
+</span><span class='ocaml-source'>  </span><span class='ocaml-keyword'>val</span><span class='ocaml-source'> </span><span class='ocaml-entity-name-function-binding'>run</span><span class='ocaml-source'> : 'rows -&gt; ('normal_form, 'rows) t -&gt; 'normal_form
+</span><span class='ocaml-source'>  </span><span class='ocaml-keyword'>val</span><span class='ocaml-source'> </span><span class='ocaml-entity-name-function-binding'>perform</span><span class='ocaml-source'> : ('rows -&gt; 'normal_form) -&gt; ('normal_form, 'rows) t
+</span><span class='ocaml-source'>  </span><span class='ocaml-keyword'>val</span><span class='ocaml-source'> </span><span class='ocaml-entity-name-function-binding'>return</span><span class='ocaml-source'> : 'normal_form -&gt; ('normal_form, 'rows) t
+</span><span class='ocaml-source'>  </span><span class='ocaml-keyword-other-ocaml'>val</span><span class='ocaml-source'> ( let* ) : ('a, 'rows) t -&gt; ('a -&gt; ('b, 'rows) t) -&gt; ('b, 'rows) t
+</span><span class='ocaml-keyword-other'>end</span><span class='ocaml-source'> </span><span class='ocaml-keyword-operator'>=</span><span class='ocaml-source'> </span><span class='ocaml-keyword-other'>struct</span><span class='ocaml-source'>
+</span><span class='ocaml-source'>  </span><span class='ocaml-keyword-other'>type</span><span class='ocaml-source'> </span><span class='ocaml-source'>(</span><span class='ocaml-storage-type'>'normal_form</span><span class='ocaml-keyword-other-ocaml punctuation-comma punctuation-separator'>,</span><span class='ocaml-source'> </span><span class='ocaml-storage-type'>'rows</span><span class='ocaml-source'>)</span><span class='ocaml-source'> </span><span class='ocaml-source'>t</span><span class='ocaml-source'> </span><span class='ocaml-keyword-operator'>=</span><span class='ocaml-source'> </span><span class='ocaml-storage-type'>'rows</span><span class='ocaml-source'> </span><span class='ocaml-keyword-operator'>-&gt;</span><span class='ocaml-source'> </span><span class='ocaml-storage-type'>'normal_form</span><span class='ocaml-source'>
+</span><span class='ocaml-source'>
+</span><span class='ocaml-source'>  </span><span class='ocaml-keyword'>let</span><span class='ocaml-source'> </span><span class='ocaml-entity-name-function-binding'>run</span><span class='ocaml-source'> </span><span class='ocaml-source'>env</span><span class='ocaml-source'> </span><span class='ocaml-source'>comp</span><span class='ocaml-source'> </span><span class='ocaml-keyword-operator'>=</span><span class='ocaml-source'> </span><span class='ocaml-source'>comp</span><span class='ocaml-source'> </span><span class='ocaml-source'>env</span><span class='ocaml-source'>
+</span><span class='ocaml-source'>  </span><span class='ocaml-keyword'>let</span><span class='ocaml-source'> </span><span class='ocaml-entity-name-function-binding'>perform</span><span class='ocaml-source'> </span><span class='ocaml-source'>f</span><span class='ocaml-source'> </span><span class='ocaml-keyword-operator'>=</span><span class='ocaml-source'> </span><span class='ocaml-source'>f</span><span class='ocaml-source'>
+</span><span class='ocaml-source'>  </span><span class='ocaml-keyword'>let</span><span class='ocaml-source'> </span><span class='ocaml-entity-name-function-binding'>return</span><span class='ocaml-source'> </span><span class='ocaml-source'>x</span><span class='ocaml-source'> </span><span class='ocaml-constant-language'>_</span><span class='ocaml-source'> </span><span class='ocaml-keyword-operator'>=</span><span class='ocaml-source'> </span><span class='ocaml-source'>x</span><span class='ocaml-source'>
+</span><span class='ocaml-source'>  </span><span class='ocaml-keyword-other'>let</span><span class='ocaml-source'> </span><span class='ocaml-source'>(</span><span class='ocaml-source'> </span><span class='ocaml-keyword'>let*</span><span class='ocaml-source'> </span><span class='ocaml-source'>)</span><span class='ocaml-source'> </span><span class='ocaml-source'>r</span><span class='ocaml-source'> </span><span class='ocaml-source'>f</span><span class='ocaml-source'> </span><span class='ocaml-source'>x</span><span class='ocaml-source'> </span><span class='ocaml-keyword-operator'>=</span><span class='ocaml-source'> </span><span class='ocaml-source'>(</span><span class='ocaml-keyword-other'>fun</span><span class='ocaml-source'> </span><span class='ocaml-source'>y</span><span class='ocaml-source'> </span><span class='ocaml-keyword-operator'>-&gt;</span><span class='ocaml-source'> </span><span class='ocaml-source'>(</span><span class='ocaml-source'>f</span><span class='ocaml-source'> </span><span class='ocaml-source'>y</span><span class='ocaml-source'>)</span><span class='ocaml-source'> </span><span class='ocaml-source'>x</span><span class='ocaml-source'>)</span><span class='ocaml-source'> </span><span class='ocaml-source'>(</span><span class='ocaml-source'>r</span><span class='ocaml-source'> </span><span class='ocaml-source'>x</span><span class='ocaml-source'>)</span><span class='ocaml-source'>
+</span><span class='ocaml-keyword-other'>end</span><span class='ocaml-source'>
+</span></code></pre>
+<p>Our module allows us to separate the description of our program from
+the passing of the environment. The only subtlety lies in the <code>(let*)</code>
+operator, a <a href="https://ocaml.org/manual/5.3/bindingops.html"><em>binding
+operator</em></a> that lets us
+simplify the writing of programs. Let's define some helpers based on
+our previous interfaces:</p>
+<pre><code><span class='ocaml-keyword-other'>module</span><span class='ocaml-source'> </span><span class='ocaml-constant-language-capital-identifier'>U</span><span class='ocaml-source'> </span><span class='ocaml-keyword-other-ocaml punctuation-other-colon punctuation'>:</span><span class='ocaml-source'> </span><span class='ocaml-keyword-other'>sig</span><span class='ocaml-source'> 
+</span><span class='ocaml-source'>  </span><span class='ocaml-keyword'>val</span><span class='ocaml-source'> </span><span class='ocaml-entity-name-function-binding'>print_endline</span><span class='ocaml-source'> : string -&gt; (unit, #console) Env.t
+</span><span class='ocaml-source'>  </span><span class='ocaml-keyword'>val</span><span class='ocaml-source'> </span><span class='ocaml-entity-name-function-binding'>read_line</span><span class='ocaml-source'> : unit -&gt; (string, #console) Env.t
+</span><span class='ocaml-source'>  </span><span class='ocaml-keyword'>val</span><span class='ocaml-source'> </span><span class='ocaml-entity-name-function-binding'>log</span><span class='ocaml-source'> : level:string -&gt; string -&gt; (unit, #loggable) Env.t
+</span><span class='ocaml-keyword-other'>end</span><span class='ocaml-source'> </span><span class='ocaml-keyword-operator'>=</span><span class='ocaml-source'> </span><span class='ocaml-keyword-other'>struct</span><span class='ocaml-source'> 
+</span><span class='ocaml-source'>  </span><span class='ocaml-keyword'>let</span><span class='ocaml-source'> </span><span class='ocaml-entity-name-function-binding'>print_endline</span><span class='ocaml-source'> </span><span class='ocaml-source'>str</span><span class='ocaml-source'> </span><span class='ocaml-keyword-operator'>=</span><span class='ocaml-source'> 
+</span><span class='ocaml-source'>    </span><span class='ocaml-constant-language-capital-identifier'>Env</span><span class='ocaml-keyword-other-ocaml punctuation-other-period punctuation-separator'>.</span><span class='ocaml-source'>perform</span><span class='ocaml-source'> </span><span class='ocaml-source'>(</span><span class='ocaml-keyword-other'>fun</span><span class='ocaml-source'> </span><span class='ocaml-source'>h</span><span class='ocaml-source'> </span><span class='ocaml-keyword-operator'>-&gt;</span><span class='ocaml-source'> </span><span class='ocaml-source'>h</span><span class='ocaml-keyword-other'>#</span><span class='ocaml-source'>print_endline</span><span class='ocaml-source'> </span><span class='ocaml-source'>str</span><span class='ocaml-source'>)</span><span class='ocaml-source'>
+</span><span class='ocaml-source'>  
+</span><span class='ocaml-source'>  </span><span class='ocaml-keyword'>let</span><span class='ocaml-source'> </span><span class='ocaml-entity-name-function-binding'>read_line</span><span class='ocaml-source'> </span><span class='ocaml-constant-language-unit'>()</span><span class='ocaml-source'> </span><span class='ocaml-keyword-operator'>=</span><span class='ocaml-source'> 
+</span><span class='ocaml-source'>    </span><span class='ocaml-constant-language-capital-identifier'>Env</span><span class='ocaml-keyword-other-ocaml punctuation-other-period punctuation-separator'>.</span><span class='ocaml-source'>perform</span><span class='ocaml-source'> </span><span class='ocaml-source'>(</span><span class='ocaml-keyword-other'>fun</span><span class='ocaml-source'> </span><span class='ocaml-source'>h</span><span class='ocaml-source'> </span><span class='ocaml-keyword-operator'>-&gt;</span><span class='ocaml-source'> </span><span class='ocaml-source'>h</span><span class='ocaml-keyword-other'>#</span><span class='ocaml-source'>read_line</span><span class='ocaml-source'> </span><span class='ocaml-constant-language-unit'>()</span><span class='ocaml-source'>)</span><span class='ocaml-source'>
+</span><span class='ocaml-source'>  
+</span><span class='ocaml-source'>  </span><span class='ocaml-keyword'>let</span><span class='ocaml-source'> </span><span class='ocaml-entity-name-function-binding'>log</span><span class='ocaml-source'> </span><span class='ocaml-source'>~</span><span class='ocaml-source'>level</span><span class='ocaml-source'> </span><span class='ocaml-source'>message</span><span class='ocaml-source'> </span><span class='ocaml-keyword-operator'>=</span><span class='ocaml-source'> 
+</span><span class='ocaml-source'>    </span><span class='ocaml-constant-language-capital-identifier'>Env</span><span class='ocaml-keyword-other-ocaml punctuation-other-period punctuation-separator'>.</span><span class='ocaml-source'>perform</span><span class='ocaml-source'> </span><span class='ocaml-source'>(</span><span class='ocaml-keyword-other'>fun</span><span class='ocaml-source'> </span><span class='ocaml-source'>h</span><span class='ocaml-source'> </span><span class='ocaml-keyword-operator'>-&gt;</span><span class='ocaml-source'> </span><span class='ocaml-source'>h</span><span class='ocaml-keyword-other'>#</span><span class='ocaml-source'>do_log</span><span class='ocaml-source'> ~</span><span class='ocaml-source'>level</span><span class='ocaml-source'> </span><span class='ocaml-source'>message</span><span class='ocaml-source'>)</span><span class='ocaml-source'>
+</span><span class='ocaml-keyword-other'>end</span><span class='ocaml-source'>
+</span></code></pre>
+<p>And now, we can describe our previous programs using our <code>let*</code> syntax
+shortcut:</p>
+<pre><code><span class='ocaml-keyword'>let</span><span class='ocaml-source'> </span><span class='ocaml-entity-name-function-binding'>comp</span><span class='ocaml-source'> </span><span class='ocaml-keyword-operator'>=</span><span class='ocaml-source'> 
+</span><span class='ocaml-source'>  </span><span class='ocaml-keyword'>let</span><span class='ocaml-source'> </span><span class='ocaml-keyword'>open</span><span class='ocaml-source'> </span><span class='ocaml-constant-language-capital-identifier'>Env</span><span class='ocaml-source'> </span><span class='ocaml-keyword-other'>in</span><span class='ocaml-source'> 
+</span><span class='ocaml-source'>  </span><span class='ocaml-keyword'>let*</span><span class='ocaml-source'> </span><span class='ocaml-constant-language-unit'>()</span><span class='ocaml-source'> </span><span class='ocaml-keyword-operator'>=</span><span class='ocaml-source'> </span><span class='ocaml-constant-language-capital-identifier'>U</span><span class='ocaml-keyword-other-ocaml punctuation-other-period punctuation-separator'>.</span><span class='ocaml-source'>log</span><span class='ocaml-source'> ~</span><span class='ocaml-source'>level</span><span class='ocaml-keyword-other-ocaml punctuation-other-colon punctuation'>:</span><span class='ocaml-string-quoted-double'>&quot;</span><span class='ocaml-string-quoted-double'>Debug</span><span class='ocaml-string-quoted-double'>&quot;</span><span class='ocaml-source'> </span><span class='ocaml-string-quoted-double'>&quot;</span><span class='ocaml-string-quoted-double'>Start teletype example</span><span class='ocaml-string-quoted-double'>&quot;</span><span class='ocaml-source'> </span><span class='ocaml-keyword-other'>in</span><span class='ocaml-source'>
+</span><span class='ocaml-source'>  </span><span class='ocaml-keyword'>let*</span><span class='ocaml-source'> </span><span class='ocaml-constant-language-unit'>()</span><span class='ocaml-source'> </span><span class='ocaml-keyword-operator'>=</span><span class='ocaml-source'> </span><span class='ocaml-constant-language-capital-identifier'>U</span><span class='ocaml-keyword-other-ocaml punctuation-other-period punctuation-separator'>.</span><span class='ocaml-source'>print_endline</span><span class='ocaml-source'> </span><span class='ocaml-string-quoted-double'>&quot;</span><span class='ocaml-string-quoted-double'>Hello, World!</span><span class='ocaml-string-quoted-double'>&quot;</span><span class='ocaml-source'> </span><span class='ocaml-keyword-other'>in</span><span class='ocaml-source'> 
+</span><span class='ocaml-source'>  </span><span class='ocaml-keyword'>let*</span><span class='ocaml-source'> </span><span class='ocaml-constant-language-unit'>()</span><span class='ocaml-source'> </span><span class='ocaml-keyword-operator'>=</span><span class='ocaml-source'> </span><span class='ocaml-constant-language-capital-identifier'>U</span><span class='ocaml-keyword-other-ocaml punctuation-other-period punctuation-separator'>.</span><span class='ocaml-source'>print_endline</span><span class='ocaml-source'> </span><span class='ocaml-string-quoted-double'>&quot;</span><span class='ocaml-string-quoted-double'>What is your name?</span><span class='ocaml-string-quoted-double'>&quot;</span><span class='ocaml-source'> </span><span class='ocaml-keyword-other'>in</span><span class='ocaml-source'> 
+</span><span class='ocaml-source'>  </span><span class='ocaml-keyword'>let</span><span class='ocaml-keyword'>*</span><span class='ocaml-source'> </span><span class='ocaml-entity-name-function-binding'>name</span><span class='ocaml-source'> </span><span class='ocaml-keyword-operator'>=</span><span class='ocaml-source'> </span><span class='ocaml-constant-language-capital-identifier'>U</span><span class='ocaml-keyword-other-ocaml punctuation-other-period punctuation-separator'>.</span><span class='ocaml-source'>read_line</span><span class='ocaml-source'> </span><span class='ocaml-constant-language-unit'>()</span><span class='ocaml-source'> </span><span class='ocaml-keyword-other'>in</span><span class='ocaml-source'> 
+</span><span class='ocaml-source'>  </span><span class='ocaml-constant-language-capital-identifier'>U</span><span class='ocaml-keyword-other-ocaml punctuation-other-period punctuation-separator'>.</span><span class='ocaml-source'>print_endline</span><span class='ocaml-source'> </span><span class='ocaml-source'>(</span><span class='ocaml-string-quoted-double'>&quot;</span><span class='ocaml-string-quoted-double'>Hello </span><span class='ocaml-string-quoted-double'>&quot;</span><span class='ocaml-source'> </span><span class='ocaml-keyword-operator'>^</span><span class='ocaml-source'> </span><span class='ocaml-source'>name</span><span class='ocaml-source'>)</span><span class='ocaml-source'>
+</span></code></pre>
+<p>And we can handle it using <code>Env.run</code>:</p>
+<pre><code><span class='ocaml-keyword-other'>#</span><span class='ocaml-source'> </span><span class='ocaml-constant-language-capital-identifier'>Env</span><span class='ocaml-keyword-other-ocaml punctuation-other-period punctuation-separator'>.</span><span class='ocaml-source'>run</span><span class='ocaml-source'> </span><span class='ocaml-keyword-other'>object</span><span class='ocaml-source'> 
+</span><span class='ocaml-source'>    </span><span class='ocaml-keyword-other'>inherit</span><span class='ocaml-source'> </span><span class='ocaml-source'>a_console</span><span class='ocaml-source'>
+</span><span class='ocaml-source'>    </span><span class='ocaml-keyword-other'>inherit</span><span class='ocaml-source'> </span><span class='ocaml-source'>a_logger</span><span class='ocaml-source'>
+</span><span class='ocaml-source'>  </span><span class='ocaml-keyword-other'>end</span><span class='ocaml-source'> </span><span class='ocaml-source'>comp</span><span class='ocaml-source'> </span><span class='ocaml-keyword-other-ocaml punctuation-separator-terminator punctuation-separator'>;</span><span class='ocaml-keyword-other-ocaml punctuation-separator-terminator punctuation-separator'>;</span><span class='ocaml-source'>
+</span><span class='ocaml-source'>[</span><span class='ocaml-constant-language-capital-identifier'>Debug</span><span class='ocaml-source'>]</span><span class='ocaml-source'> </span><span class='ocaml-constant-language-capital-identifier'>Start</span><span class='ocaml-source'> </span><span class='ocaml-source'>teletype</span><span class='ocaml-source'> </span><span class='ocaml-source'>example</span><span class='ocaml-source'>
+</span><span class='ocaml-constant-language-capital-identifier'>Hello</span><span class='ocaml-keyword-other-ocaml punctuation-comma punctuation-separator'>,</span><span class='ocaml-source'> </span><span class='ocaml-constant-language-capital-identifier'>World</span><span class='ocaml-keyword-operator'>!</span><span class='ocaml-source'>
+</span><span class='ocaml-constant-language-capital-identifier'>What</span><span class='ocaml-source'> </span><span class='ocaml-source'>is</span><span class='ocaml-source'> </span><span class='ocaml-source'>your</span><span class='ocaml-source'> </span><span class='ocaml-source'>name</span><span class='ocaml-source'>?
+</span><span class='ocaml-constant-language-capital-identifier'>Hello</span><span class='ocaml-source'> </span><span class='ocaml-constant-language-capital-identifier'>Pierre</span><span class='ocaml-source'>
+</span><span class='ocaml-source'>
+</span><span class='ocaml-keyword-operator'>-</span><span class='ocaml-source'> </span><span class='ocaml-keyword-other-ocaml punctuation-other-colon punctuation'>:</span><span class='ocaml-source'> </span><span class='ocaml-support-type'>unit</span><span class='ocaml-source'> </span><span class='ocaml-keyword-operator'>=</span><span class='ocaml-source'> </span><span class='ocaml-constant-language-unit'>()</span><span class='ocaml-source'>
+</span></code></pre>
+<p>Some prefer to pass handlers explicitly to avoid relying on binding
+operators. Personally, I really like that the operators make it
+explicit whether I’m dealing with a pure expression or one that
+requires dependencies, and I find that binding operators make the code
+readable and easy to reason about.</p>
+<h2 id="under-the-hood"><a class="anchor" aria-hidden="true" href="#under-the-hood"></a>Under the hood</h2>
+<p>Looking at the signature of the <code>Env</code> module, many will notice that it
+is a <a href="https://hackage.haskell.org/package/mtl-2.3.1/docs/Control-Monad-Reader.html">Reader
+Monad</a>
+(a specialization of <code>ReaderT</code> transformed with the <code>Identity</code> monad),
+which is sometimes also called a <code>Kleisli</code>. In practice, this allows
+us to be parametric over the normal form of our expressions. For
+simplicity in the examples, I’ve minimized indirection, but it is
+entirely possible to project our results into a more refined monad,
+defining a richer runtime (and potentially supporting continuation
+control, effect interleaving, etc.).</p>
+<h2 id="to-conclude"><a class="anchor" aria-hidden="true" href="#to-conclude"></a>To conclude</h2>
+<p>Some might be surprised—indeed, I’ve fairly closely applied the
+<a href="https://www.snoyman.com/blog/2019/11/boring-haskell-manifesto/"><em>Boring
+Haskell</em></a>
+philosophy. I literally used objects for dependency injection (the
+<strong>extra-classical approach</strong> to DI) and rely on a <code>ReaderT</code> to access
+my environment on demand, which is a <strong>very common approach</strong> in the
+Haskell community.</p>
+<p>The only idea here, <strong>which isn’t particularly novel</strong>, is to use
+subtyping relationships to statically track the required dependencies,
+and rely on inheritance to arbitrarily compose handlers. From my point
+of view, this drastically reduces the need to stack transformers while
+still keeping modularity and extensibility. By relying on a different
+normal form than the identity monad, it’s possible to achieve results
+that are surprisingly pleasant to use and <em>safe</em>, as demonstrated by
+<a href="https://getkyo.io/">Kyo</a> in the Scala world. In OCaml, the richness
+of the object model (and its structural capabilities) is a real
+advantage for this kind of encoding, allowing a drastic reduction of
+the boilerplate needed to manage multiple sets of dependencies.</p>
+<p>In practice, I’ve found this approach effective for both personal and
+professional projects (and, importantly, very easy to explain). One
+limitation is the inability to eliminate dependencies when they are
+partially interpreted in ways other than by partial function
+application. Still, the encoding remains neat for at least three
+reasons:</p>
+<ul>
+<li>It allows us to statically track dependencies in the context of
+dependency injection.</li>
+<li>It makes it easy to write testable programs by providing handlers
+adapted for unit tests.</li>
+<li>It provides another example showing that OCaml’s objects are really
+powerful and can offer fun solutions to well-worn problems.</li>
+</ul>
+<p>In the not-so-distant future, we might even imagine providing handlers
+more lightly using <a href="https://www.cl.cam.ac.uk/~jdy22/papers/modular-implicits.pdf">Modular
+Implicits</a>.</p>
+<p>Thank you for reading (if you made it this far), and a special thanks
+to <a href="https://xvw.lol">Xavier Van de Woestyne</a> for his article that inspired me to
+write this one, and to <a href="https://x.com/ahoy_jon">Jonathan Winandy</a> for showing me
+Kyo and helping me rephrase some sentences.</p>
+<h3>Bibliography</h3>
+  <ol class="bibliography"><li>
+      <span class="title"><a href="https://xvw.lol/en/articles/why-ocaml.html">Why I chose OCaml as my primary language</a></span><ul class="authors"><li>Xavier Van de Woestyne</li></ul>
+    </li><li>
+      <span class="title"><a href="https://getkyo.io/">Kyo: Toolkit for Scala Development</a></span><ul class="authors"><li>Flavio Brasil</li><li>and contributors</li></ul>
+    </li><li>
+      <span class="title"><a href="https://okmij.org/ftp/Computation/free-monad.html">Free and Freer Monads: Putting Monads Back into Closet</a></span><ul class="authors"><li>Oleg Kiselyov</li></ul>
+    </li><li>
+      <span class="title"><a href="https://caml.inria.fr/pub/docs/u3-ocaml/ocaml-objects.html">Using, Understanding, and Unraveling The OCaml Language: The object layer</a></span><ul class="authors"><li>Didier Remy</li></ul>
+    </li><li>
+      <span class="title"><a href="https://keleshev.com/composable-error-handling-in-ocaml">Composable Error Handling</a></span><ul class="authors"><li>Vladimir Keleshev</li></ul>
+    </li><li>
+      <span class="title"><a href="https://www.snoyman.com/blog/2019/11/boring-haskell-manifesto/">Boring Haskell Manifesto</a></span><ul class="authors"><li>Michael Snoyman</li></ul>
+    </li></ol></article>
+</main>
+    <footer>
+      <p>
+        Crafted with <a href="https://github.com/xhtmlboi/yocaml">YOCaml</a>
+      </p>
+      <p>
+        This website is member of
+        <a href="https://ring.muhokama.fun">Muhokama</a> -
+        <a href="https://ring.muhokama.fun/u/grim/pred">Pred</a> |
+        <a href="https://ring.muhokama.fun/u/grim/succ">Succ</a>
+      </p>
+      <a class="atom-btn" href="/atom.xml">atom</a>
+    </footer>
+  </body>
+</html>
