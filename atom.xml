@@ -4,7 +4,7 @@
   <title type="text">Grim&apos;s web corner</title>
   <subtitle type="text">Notes, essays and ramblings</subtitle>
   <generator uri="https://github.com/xhtmlboi/yocaml" version="2">YOCaml</generator>
-  <updated>2025-08-18T00:00:00Z</updated>
+  <updated>2026-09-30T00:00:00Z</updated>
   <author>
     <name>Grim</name>
     <uri>https://grim.cargocut.org</uri>
@@ -12,6 +12,15 @@
   </author>
   <link href="https://grim.cargocut.org/atom.xml" rel="self"/>
   <link href="https://grim.cargocut.org"/>
+  <entry>
+    <id>https://grim.cargocut.org/a/rev-list.html</id>
+    <title type="text">Lists that keep track of their reversal</title>
+    <updated>2026-09-30T00:00:00Z</updated>
+    <summary type="text">
+      Summary of a small discussion on how to track, at type level, whether a list is constructed forwards or backwards. It remains to be seen whether this will be useful in everyday life, but the proposal is driven by a specific issue.
+    </summary>
+    <link href="https://grim.cargocut.org/a/rev-list.html" rel="alternate" title="Lists that keep track of their reversal"/>
+  </entry>
   <entry>
     <id>https://grim.cargocut.org/a/dependency-injection.html</id>
     <title type="text">Basic dependency injection with objects</title>
